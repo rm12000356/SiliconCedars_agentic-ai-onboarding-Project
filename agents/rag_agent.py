@@ -1,1 +1,5 @@
-"""RAG agent over the indexed internal document collection."""
+from state.state import PLaceHolder
+
+def RAG(state: PLaceHolder):
+
+    return print("RAG")
