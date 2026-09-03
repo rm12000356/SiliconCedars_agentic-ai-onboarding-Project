@@ -80,6 +80,11 @@ def sub_workflow():
     builder.add_conditional_edges(
         "controler",
         route_sub_supervisor,
+        {
+            "researcher": "research",
+            "report": "report",
+            "end": END,
+        }
     )
 
     builder.add_edge("research", "controler")
