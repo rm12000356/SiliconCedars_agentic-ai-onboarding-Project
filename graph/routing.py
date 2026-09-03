@@ -1,21 +1,6 @@
-from typing import Literal, get_args
-from state.state import SupervisorState, SubGraphSupervisorState
+from typing import  get_args
+from state.state import SupervisorState, SubGraphSupervisorState, MainRoute, SubRoute
 
-MainRoute = Literal[
-    "rag",
-    "convo",
-    "sql",
-    "research",
-    "visu",
-    "clarification",
-    "end",
-]
-
-SubRoute = Literal[
-    "researcher",
-    "report",
-    "end",
-]
 
 _VALID_MAIN_ROUTES = set(get_args(MainRoute))
 _VALID_SUB_ROUTES = set(get_args(SubRoute))

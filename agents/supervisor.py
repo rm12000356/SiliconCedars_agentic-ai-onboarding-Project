@@ -86,7 +86,7 @@ def build_prompt(context: dict, previous_error: str | None = None) -> list:
     return messages
 
 
-def get_supervisor_decision(context: dict, llm, max_attempts: int = 2) -> SupervisorDecision:
+def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> SupervisorDecision:
     """
     Calls the LLM for a routing decision, validating and retrying on
     malformed output. Falls back to clarification if it can't get a
@@ -99,7 +99,7 @@ def get_supervisor_decision(context: dict, llm, max_attempts: int = 2) -> Superv
         prompt = build_prompt(context, previous_error=last_error)
 
         try:
-            raw_response = llm.with_structured_output(SupervisorDecision).invoke(prompt)
+            raw_response = model.with_structured_output(SupervisorDecision).invoke(prompt)
             return SupervisorDecision.model_validate(raw_response)
 
         except ValidationError as e:
@@ -119,4 +119,5 @@ def map_to_state(decision: SupervisorDecision) -> dict:
     return {
         "next": decision.next,
         "current_task": decision.current_task,
+        "last_result": None, 
     }

@@ -1,5 +1,5 @@
-from state.state import SpecialistResult
+from state.state import SupervisorState
 
-def Clarification(state: SpecialistResult):
+def Clarification(state: SupervisorState):
 
     return print("Clarification")
