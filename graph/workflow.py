@@ -35,7 +35,16 @@ def Main_WorkFlow():
 
     builder.add_conditional_edges(
     "supervisor",
-    route_supervisor
+    route_supervisor,
+        {
+            "rag": "rag",
+            "convo": "convo",
+            "sql": "sql",
+            "visu": "visu",
+            "research": "research",
+            "clarification": "clarification",
+            "end": END,
+        },
     )
 
     
