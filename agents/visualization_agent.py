@@ -1,5 +1,5 @@
-from state.state import PLaceHolder
+from state.state import SpecialistResult
 
-def Visualization(state: PLaceHolder):
+def Visualization(state: SpecialistResult):
 
     return print("visualization")

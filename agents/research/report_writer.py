@@ -1,6 +1,6 @@
 
-from state.state import PLaceHolder
+from state.state import SpecialistResult
 
-def Report_W(state: PLaceHolder):
+def Report_W(state: SpecialistResult):
 
     return print("Report_W")

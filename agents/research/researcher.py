@@ -1,5 +1,5 @@
-from state.state import PLaceHolder
+from state.state import SpecialistResult
 
-def Research(state: PLaceHolder):
+def Research(state: SpecialistResult):
 
     return print("research")

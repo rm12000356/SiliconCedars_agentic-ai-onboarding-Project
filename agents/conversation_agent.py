@@ -1,5 +1,5 @@
-from state.state import PLaceHolder
+from state.state import SpecialistResult
 
-def Convo(state: PLaceHolder):
+def Convo(state: SpecialistResult):
 
     return print("Convo")
