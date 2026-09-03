@@ -15,7 +15,7 @@ MainRoute = Literal[
     "end",
 ]
 
-specialisationroute = Literal[
+SpecialistRoute = Literal[
     "rag",
     "convo",
     "sql",
@@ -35,7 +35,7 @@ class SpecialistResult(BaseModel):
     Deliberately thin: no raw tool metadata, no similarity scores,
     no query plans. Just enough for the Supervisor to decide what's next.
     """
-    source: specialisationroute = Field(description="Which specialist produced this result")
+    source: SpecialistRoute = Field(description="Which specialist produced this result")
     summary: str = Field(description="The actual answer/content, already synthesized")
     status: Literal["done", "partial", "failed"] = Field(
         description="Whether the specialist fully completed its objective"

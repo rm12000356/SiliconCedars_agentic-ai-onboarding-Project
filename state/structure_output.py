@@ -1,6 +1,6 @@
 from typing import Optional
 from pydantic import BaseModel, Field
-from state.state import MainRoute  # reuse the same Literal, don't redefine it
+from state.state import SpecialistRoute
 
 
 class SupervisorDecision(BaseModel):
@@ -9,7 +9,7 @@ class SupervisorDecision(BaseModel):
     This is the LLM call's validation boundary, not persisted state.
     map_to_state() unpacks this into SupervisorState.next / current_task.
     """
-    next: MainRoute = Field(
+    next: SpecialistRoute = Field(
         description="Exactly one route to send the request to next."
     )
     current_task: str = Field(
