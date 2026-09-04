@@ -1,6 +1,7 @@
 from langgraph.types import interrupt, Command
 from langchain_core.messages import HumanMessage
 from state.state import SupervisorState
+from langchain_core.runnables import RunnableConfig
 
 
 def Clarification(state: SupervisorState) -> dict:
@@ -24,5 +25,5 @@ def resume_clarification(graph, thread_id: str, answer: str):
     Called by the application layer once the human has answered the
     clarifying question. Resumes the paused graph at the interrupt point.
     """
-    config = {"configurable": {"thread_id": thread_id}}
+    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
     return graph.invoke(Command(resume=answer), config=config)
