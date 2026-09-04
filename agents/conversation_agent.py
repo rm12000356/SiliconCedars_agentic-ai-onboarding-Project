@@ -1,4 +1,4 @@
-from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from state.state import SupervisorState
 from services.llm import llm
  
@@ -19,7 +19,7 @@ def Convo(state: SupervisorState) -> dict:
             "Convo node reached with current_task=None. The Supervisor "
             "should always set current_task before routing here."
         )
-    
+    print(f"[CONVO] current_task={state.current_task!r}")
     model = llm()
 
     msg = [SystemMessage(content=CONVO_SYSTEM_PROMPT)] + [HumanMessage(content=state.current_task)]
