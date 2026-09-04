@@ -14,12 +14,15 @@ from agents.supervisor import supervisor_agent
 from agents.sql_agent import Sql_agent
 from agents.visualization_agent import Visualization
 from agents.clarification import Clarification
+from agents.research.research_node import make_research_node
 
 
 def Main_WorkFlow():
-    builder = StateGraph(SupervisorState)
 
     subgraph = sub_workflow()
+
+
+    builder = StateGraph(SupervisorState)
 
     
     builder.add_node("supervisor", supervisor_agent)
@@ -27,7 +30,7 @@ def Main_WorkFlow():
     builder.add_node("convo", Convo)
     builder.add_node("sql", Sql_agent)
     builder.add_node("visu", Visualization)
-    builder.add_node("research", subgraph)
+    builder.add_node("research", make_research_node(subgraph))
     builder.add_node("clarification", Clarification)
 
     

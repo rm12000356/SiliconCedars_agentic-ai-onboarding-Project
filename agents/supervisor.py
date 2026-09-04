@@ -6,7 +6,7 @@ from services.llm import llm
 
 SUPERVISOR_SYSTEM_PROMPT = """You are the routing supervisor for a company intelligence assistant.
 Based on the conversation, decide which specialist should handle the latest request.
-
+ 
 Routes:
 - rag: internal company documents, policies, procedures. DEFAULT for organizational questions.
 - research: external/public information. Only use if the user explicitly asks to research,
@@ -16,15 +16,21 @@ Routes:
 - convo: you can answer directly, no specialist needed (definitions, small talk, clarifying your own prior answer).
 - clarification: the request could genuinely map to more than one route and cannot be
   disambiguated from the message alone.
-
+- end: the most recent message already fully answers the user's request and nothing
+  further needs to happen. Use this whenever the last message in the conversation is
+  an assistant response (from convo or a specialist) that already satisfies what the
+  user asked for. Do not route back to convo or any specialist a second time for the
+  same completed request, that just repeats the same answer.
+ 
 If the last specialist result has status "partial" or "failed", factor that in:
 - if the topic was organizational and RAG found nothing, respond via clarification or convo
   explaining no data exists. Do not fall through to research.
 - if the topic was non-organizational and nothing was found, research may be appropriate.
-
+ 
 For convo, also produce a short pre-summary of relevant conversation context in current_task,
 not a raw instruction, since convo will not see the full message history.
 For all other routes, current_task should be a concise actionable task description.
+For end, current_task can be a short, empty-ish placeholder, it will not be used.
 """
 
 
@@ -48,6 +54,8 @@ def supervisor_agent(state: SupervisorState) -> dict:
         # than silently defaulting to clarification
         raise RuntimeError(f"Supervisor LLM call failed: {e}") from e
 
+    print(f"[SUPERVISOR] decision.next={decision.next!r} current_task={decision.current_task!r}")
+
     return map_to_state(decision)
 
 
@@ -59,6 +67,7 @@ def gather_context(state: SupervisorState) -> dict:
     the Supervisor gets full history, but we're explicit about
     what's passed forward so build_prompt isn't reaching into state itself.
     """
+    print(f"[GATHER_CONTEXT] {len(state.messages)} messages, last_result={state.last_result!r}")
     return {
         "messages": state.messages,
         "last_result": state.last_result,  # None if this is the first turn
