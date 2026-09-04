@@ -1,7 +1,7 @@
 from state.state import SupervisorState, SpecialistResult
 
-def SQL(state: SupervisorState) -> dict:
-    print("SQL called with task:", state.current_task)
+def Sql_agent(state: SupervisorState) -> dict:
+    print("Sql_agent called with task:", state.current_task)
     result = SpecialistResult(
         source="sql",
         summary="Placeholder SQL response.",

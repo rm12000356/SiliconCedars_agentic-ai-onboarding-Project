@@ -1,5 +1,3 @@
-from state.state import SpecialistResult
-
 from state.state import SupervisorState, SpecialistResult
 
 def Visualization(state: SupervisorState) -> dict:
