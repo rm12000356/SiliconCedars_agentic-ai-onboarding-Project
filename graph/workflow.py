@@ -13,6 +13,7 @@ from agents.research.supervisor import Sub_controler
 from agents.supervisor import supervisor_agent
 from agents.sql_agent import Sql_agent
 from agents.visualization_agent import Visualization
+from agents.clarification import Clarification
 
 
 def Main_WorkFlow():
@@ -26,7 +27,8 @@ def Main_WorkFlow():
     builder.add_node("convo", Convo)
     builder.add_node("sql", Sql_agent)
     builder.add_node("visu", Visualization)
-    builder.add_node("worker", subgraph)
+    builder.add_node("research", subgraph)
+    builder.add_node("clarification", Clarification)
 
     
     builder.add_edge(START, "supervisor")
@@ -34,14 +36,15 @@ def Main_WorkFlow():
     builder.add_conditional_edges(
     "supervisor",
     route_supervisor,
-    {
-        "rag": "rag",
-        "convo": "convo",
-        "sql": "sql",
-        "visu": "visu",
-        "worker": "worker",
-        "end": END,
-    },
+        {
+            "rag": "rag",
+            "convo": "convo",
+            "sql": "sql",
+            "visu": "visu",
+            "research": "research",
+            "clarification": "clarification",
+            "end": END,
+        },
     )
 
     
@@ -49,7 +52,8 @@ def Main_WorkFlow():
     builder.add_edge("convo", "supervisor")
     builder.add_edge("sql", "supervisor")
     builder.add_edge("visu", "supervisor")
-    builder.add_edge("worker", "supervisor")
+    builder.add_edge("research", "supervisor")
+    builder.add_edge("clarification", "supervisor")
 
 
     memory = MemorySaver()
@@ -77,10 +81,10 @@ def sub_workflow():
         "controler",
         route_sub_supervisor,
         {
-            "research": "research",
+            "researcher": "research",
             "report": "report",
             "end": END,
-        },
+        }
     )
 
     builder.add_edge("research", "controler")

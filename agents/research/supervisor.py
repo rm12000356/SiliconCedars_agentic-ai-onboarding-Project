@@ -1,5 +1,5 @@
-from state.state import PLaceHolder
+from state.state import SubGraphSupervisorState
 
-def Sub_controler(state: PLaceHolder):
+def Sub_controler(state: SubGraphSupervisorState):
 
     return print("subcontroler")

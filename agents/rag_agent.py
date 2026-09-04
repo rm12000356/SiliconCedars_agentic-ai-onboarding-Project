@@ -1,5 +1,5 @@
-from state.state import PLaceHolder
+from state.state import SpecialistResult
 
-def RAG(state: PLaceHolder):
+def RAG(state: SpecialistResult):
 
     return print("RAG")
