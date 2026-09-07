@@ -135,7 +135,7 @@ def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> Supe
         prompt = build_prompt(context, previous_error=last_error)
 
         try:
-            raw_response = model.with_structured_output(SupervisorDecision).invoke(prompt)
+            raw_response = model.with_structured_output(SupervisorDecision, method="function_calling").invoke(prompt)
             return SupervisorDecision.model_validate(raw_response)
 
         except ValidationError as e:
