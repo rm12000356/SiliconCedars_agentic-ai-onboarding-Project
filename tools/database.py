@@ -1,8 +1,9 @@
 from psycopg import sql
 from db.connection import get_elevated_connection, get_general_connection
+from langchain.tools import tool
 
 # Static data for the lessons_learned table. This is a fixed, gated tool, so it uses the elevated connection.
-
+@tool
 def get_salary(employee_id: int) -> dict:
     """
     Fixed, gated tool. Uses the elevated connection since salary data
@@ -22,7 +23,7 @@ def get_salary(employee_id: int) -> dict:
                 return {"found": False, "salary": None}
             return {"found": True, "salary": row[0]}
 
-
+@tool
 def get_user_credential(user_id: int) -> dict:
     """
     Same pattern as get_salary. Placeholder for whatever real
@@ -39,7 +40,7 @@ def get_user_credential(user_id: int) -> dict:
                 return {"found": False}
             return {"found": True, "password_hash": row[0]}
 
-
+@tool
 def run_general_query(query_text: str) -> list[dict]:
     """
     Executes agent-generated SQL through the restricted general_role
@@ -61,3 +62,11 @@ def run_general_query(query_text: str) -> list[dict]:
             columns = [desc[0] for desc in cur.description]
             rows = cur.fetchall()
             return [dict(zip(columns, row)) for row in rows]
+
+
+
+
+
+
+GENERAL_TOOLS = [run_general_query]
+ELEVATED_TOOLS = [get_salary, get_user_credential]

@@ -14,7 +14,13 @@ def run():
     # random session per process run. Ties to the user_id/thread_id
     # design in the handoff doc once auth actually exists.
     thread_id = str(uuid.uuid4())
-    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+    config: RunnableConfig = {
+        "configurable": {
+            "thread_id": thread_id,
+            "user_id": "test-user-1",         # static stand-in until real auth exists
+            "permission_level": "elevated",     # flip to "elevated" manually to test the gate
+        },
+    }
 
     print("Company Intelligence Assistant. Type 'quit' to exit.")
 
@@ -34,7 +40,7 @@ def run():
             interrupt_payload = result["__interrupt__"][0].value
             question = interrupt_payload["question"]
             answer = input(f"\n{question}\nYou: ").strip()
-            result = resume_clarification(graph, thread_id, answer)
+            result = resume_clarification(graph, thread_id, answer, config)
 
         last_message = result["messages"][-1]
         print(f"\nAssistant: {last_message.content}")

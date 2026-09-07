@@ -5,32 +5,50 @@ from langchain_core.messages import SystemMessage
 from services.llm import llm
 
 SUPERVISOR_SYSTEM_PROMPT = """You are the routing supervisor for a company intelligence assistant.
-Based on the conversation, decide which specialist should handle the latest request.
- 
-Routes:
-- rag: internal company documents, policies, procedures. DEFAULT for organizational questions.
-- research: external/public information. Only use if the user explicitly asks to research,
-  look up, or find external information. Never use for organizational topics.
-- sql: questions requiring live structured data (counts, sums, specific records).
-- visu: requests to visualize or chart data.
-- convo: you can answer directly, no specialist needed (definitions, small talk, clarifying your own prior answer).
-- clarification: the request could genuinely map to more than one route and cannot be
-  disambiguated from the message alone.
-- end: the most recent message already fully answers the user's request and nothing
-  further needs to happen. Use this whenever the last message in the conversation is
-  an assistant response (from convo or a specialist) that already satisfies what the
-  user asked for. Do not route back to convo or any specialist a second time for the
-  same completed request, that just repeats the same answer.
- 
-If the last specialist result has status "partial" or "failed", factor that in:
-- if the topic was organizational and RAG found nothing, respond via clarification or convo
-  explaining no data exists. Do not fall through to research.
-- if the topic was non-organizational and nothing was found, research may be appropriate.
- 
-For convo, also produce a short pre-summary of relevant conversation context in current_task,
-not a raw instruction, since convo will not see the full message history.
-For all other routes, current_task should be a concise actionable task description.
-For end, current_task can be a short, empty-ish placeholder, it will not be used.
+    Based on the conversation, decide which specialist should handle the latest request.
+
+    Routes:
+    - rag: internal company documents, policies, procedures. DEFAULT for organizational questions.
+    - research: external/public information. Only use if the user explicitly asks to research,
+    look up, or find external information. Never use for organizational topics.
+    - sql: questions requiring live structured data (counts, sums, specific records).
+    - visu: requests to visualize or chart data.
+    - convo: you can answer directly, no specialist needed (definitions, small talk, clarifying your
+    own prior answer, or synthesizing/rephrasing when a plain specialist result isn't enough on its own).
+    - clarification: the request could genuinely map to more than one route and cannot be
+    disambiguated from the message alone.
+    - end: the most recent message already fully answers the user's request and nothing further
+    needs to happen. A completed specialist result (status="done") is presented to the user
+    automatically when you choose end, you do not need to route to convo just to relay it.
+
+    Reacting to the last specialist result:
+    - status="done": the specialist succeeded. In almost all cases, choose next="end" directly,
+    the result will be shown to the user automatically. Only route to convo instead if the raw
+    result genuinely needs rephrasing, combining with another result, or the user asked something
+    the specialist didn't fully address. Never route back to the same specialist that just succeeded.
+    - status="partial" or "failed": read the issue field before deciding.
+    - if issue is "permission_denied": this is a TERMINAL failure. No retry, rephrasing, or
+        different specialist will change the outcome. Route to convo exactly once to explain the
+        restriction, then end. Do not route back to sql or any specialist for this request again.
+    - if the topic was organizational and RAG found nothing: respond via clarification or convo
+        explaining no data exists. Do not fall through to research.
+    - if the topic was non-organizational and nothing was found: research may be appropriate.
+    - general rule: never route to the same specialist twice in a row for the same unresolved
+        request, and never bounce back and forth between a specialist and convo more than once.
+        If a specialist's failure isn't resolvable by retrying, explain the limitation via convo
+        once, then end.
+
+    For convo, also produce a short pre-summary of relevant conversation context in current_task,
+    not a raw instruction, since convo will not see the full message history.
+    For all other routes, current_task should be a concise actionable task description.
+    For end, current_task can be a short, empty-ish placeholder, it will not be used.
+
+    Never assume a request is restricted, confidential, or permission-denied on your own judgment.
+    You do not know the user's actual permissions or what data exists. If the user asks for data,
+    route to the appropriate specialist (sql, rag, etc.) and let it determine access and existence.
+    Only treat something as a permission or access problem after last_result.issue reports it
+    explicitly. Do not pre-emptively refuse a request based on what seems sensitive or confidential
+    by general knowledge, that determination is not yours to make.
 """
 
 
@@ -80,8 +98,11 @@ def build_prompt(context: dict, previous_error: str | None = None) -> list:
     if context["last_result"] is not None:
         lr = context["last_result"]
         messages.append(SystemMessage(
-            content=f"Last specialist result — source: {lr.source}, "
-                    f"status: {lr.status}, issue: {lr.issue or 'none'}"
+            content=(
+                f"Last specialist result — source: {lr.source}, "
+                f"status: {lr.status}, issue: {lr.issue or 'none'}\n"
+                f"Summary: {lr.summary}"
+            )
         ))
 
     messages.extend(context["messages"])
@@ -125,8 +146,16 @@ def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> Supe
     )
 
 def map_to_state(decision: SupervisorDecision) -> dict:
-    return {
-        "next": decision.next,
-        "current_task": decision.current_task,
-        "last_result": None, 
-    }
+    
+    if decision.next != "end":
+        update = {
+                "next": decision.next,
+                "current_task": decision.current_task,
+                "last_result": None,  
+            }
+    else:
+        update = {
+                "next": decision.next,
+                "current_task": decision.current_task,
+            }
+    return update
