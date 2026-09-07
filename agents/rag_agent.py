@@ -7,7 +7,7 @@ from rag.retrieval import retrieve_relevant_chunks
 # match. Starting point, not tuned yet, lower = more similar, 0 = identical.
 # Worth adjusting once you see real retrieval results, this number is a
 # guess until tested against actual queries.
-NO_MATCH_DISTANCE_THRESHOLD = 0.5
+NO_MATCH_DISTANCE_THRESHOLD = 0.8
 
 
 def RAG(state: SupervisorState) -> dict:
@@ -26,6 +26,9 @@ def RAG(state: SupervisorState) -> dict:
         )
 
     chunks = retrieve_relevant_chunks(state.current_task, top_k=3)
+
+    print(f"[RAG] raw distances: {[(c['distance'], c['content'][:50]) for c in chunks]}")
+
     relevant_chunks = [c for c in chunks if c["distance"] < NO_MATCH_DISTANCE_THRESHOLD]
 
     if not relevant_chunks:

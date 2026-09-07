@@ -18,9 +18,9 @@ def retrieve_relevant_chunks(query: str, top_k: int = 3) -> list[dict]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT content, source_table, source_id, embedding <=> %s AS distance
+                SELECT content, source_table, source_id, embedding <=> %s::vector AS distance
                 FROM general_embeddings
-                ORDER BY embedding <=> %s
+                ORDER BY embedding <=> %s::vector
                 LIMIT %s
                 """,
                 (query_vector, query_vector, top_k),
