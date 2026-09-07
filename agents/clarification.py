@@ -20,10 +20,9 @@ def Clarification(state: SupervisorState) -> dict:
         "last_result": None,    # nothing to carry forward from a pause
     }
 
-def resume_clarification(graph, thread_id: str, answer: str):
+def resume_clarification(graph, thread_id: str, answer: str, config: RunnableConfig):
     """
     Called by the application layer once the human has answered the
     clarifying question. Resumes the paused graph at the interrupt point.
     """
-    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
     return graph.invoke(Command(resume=answer), config=config)
