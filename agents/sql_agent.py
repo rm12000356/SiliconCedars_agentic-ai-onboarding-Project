@@ -5,6 +5,30 @@ from services.llm import llm
 from tools.database import GENERAL_TOOLS, ELEVATED_TOOLS
  
  
+def _extract_chartable_rows(tool_output) -> list[dict] | None:
+    """
+    Detects whether a tool's raw output looks like simple 2-column
+    tabular data (e.g. a GROUP BY query: region, total). Returns a
+    normalized [{"label": ..., "value": ...}, ...] list if so, else
+    None. This is a heuristic, not a guarantee, run_general_query can
+    return arbitrary shapes; only the clean 2-column case is treated
+    as chartable, everything else is left alone.
+    """
+    if not isinstance(tool_output, list) or not tool_output:
+        return None
+    if not all(isinstance(row, dict) and len(row) == 2 for row in tool_output):
+        return None
+
+    rows = []
+    for row in tool_output:
+        values = list(row.values())
+        label, value = values[0], values[1]
+        if not isinstance(value, (int, float)):
+            return None  # second column isn't numeric, not chartable as-is
+        rows.append({"label": str(label), "value": float(value)})
+    return rows
+
+
 def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
     """
     Runs a bounded tool-calling loop against the permission-gated tool
@@ -79,6 +103,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
  
     messages = [system_message] + [HumanMessage(content=state.current_task)]
     max_iterations = 5
+    last_chartable_rows = None
  
     for i in range(max_iterations):
         print(f"[SQL] iteration {i + 1}/{max_iterations}")
@@ -92,6 +117,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
                 source="sql",
                 summary= str(response.content),
                 status="done",
+                structured_data=last_chartable_rows,
             )
             return {"last_result": result}
  
@@ -138,6 +164,12 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
                 tool_output = f"Tool execution error: {type(e).__name__}: {e}"
  
             print(f"[SQL] tool result: {str(tool_output)[:300]}")
+
+            detected_rows = _extract_chartable_rows(tool_output)
+            if detected_rows:
+                last_chartable_rows = detected_rows
+                print(f"[SQL] detected chartable rows: {detected_rows}")
+
             messages = messages + [
                 ToolMessage(content=str(tool_output), tool_call_id=call["id"])
             ]
