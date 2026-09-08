@@ -2,6 +2,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from agents.finalize import Finalize
+from agents.memory_manager import memory_manager
 from state.state import SupervisorState, SubGraphSupervisorState
 
 from graph.routing import route_supervisor, route_sub_supervisor
@@ -26,6 +27,7 @@ def Main_WorkFlow():
     builder = StateGraph(SupervisorState)
 
     
+    builder.add_node("memory_manager", memory_manager)
     builder.add_node("supervisor", supervisor_agent)
     builder.add_node("rag", RAG)
     builder.add_node("convo", Convo)
@@ -36,7 +38,8 @@ def Main_WorkFlow():
     builder.add_node("finalize", Finalize)
 
     
-    builder.add_edge(START, "supervisor")
+    builder.add_edge(START, "memory_manager")
+    builder.add_edge("memory_manager", "supervisor")
 
     builder.add_conditional_edges(
     "supervisor",

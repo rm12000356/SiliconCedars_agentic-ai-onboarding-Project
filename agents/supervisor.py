@@ -364,10 +364,7 @@ def get_supervisor_decision(
 
 
 def get_current_turn(state: SupervisorState) -> int:
-    human_count = sum(
-        1 for m in state.messages if isinstance(m, HumanMessage)
-    )
-    return max(human_count, 1)
+    return state.turn_count
 
 
 def map_to_state(decision: SupervisorDecision) -> dict:

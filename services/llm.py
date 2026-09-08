@@ -10,7 +10,7 @@ PRIMARY_MODEL = "openai/gpt-oss-120b"
 
 FALLBACK_MODELS = [
     "openai/gpt-oss-20b",
-    "qwen/qwen3-32b",                 # check the exact name on Groq
+    "qwen/qwen3-32b",                 
     "openai/gpt-oss-safeguard-20b",
 ]
 
@@ -32,9 +32,7 @@ def llm(model: str | None = None):
         try:
             print(f"[LLM] Trying Groq: {m}")
             client = ChatGroq(model=m)
-            # Quick health-check so we catch rate-limit / invalid model early
-            # (optional – remove if you prefer lazy failure)
-            # client.invoke("ping")
+            client.invoke("ping")
             return client
         except Exception as e:
             print(f"[LLM] Groq {m} failed: {e}")

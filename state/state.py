@@ -123,6 +123,13 @@ class SupervisorState(BaseModel):
             "Tracks what task was done and what result came from it."
         )
     )
+    turn_count: int = Field(
+        default=0,
+        description=(
+            "turn counter, set exactly once per external graph.invoke() call by memory_manager "
+            "(the graph's entry node)"
+        )
+    )
 
 
 class SubGraphSupervisorState(BaseModel):
