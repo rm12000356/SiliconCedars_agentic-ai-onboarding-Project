@@ -1,7 +1,7 @@
-from state.state import SupervisorState
+from state.state import SupervisorState , TaskRecord
 from state.structure_output import SupervisorDecision
 from pydantic import ValidationError
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from services.llm import llm
 
 SUPERVISOR_SYSTEM_PROMPT = """You are the routing supervisor for a company intelligence assistant.
@@ -12,7 +12,9 @@ SUPERVISOR_SYSTEM_PROMPT = """You are the routing supervisor for a company intel
     - research: external/public information. Only use if the user explicitly asks to research,
     look up, or find external information. Never use for organizational topics.
     - sql: questions requiring live structured data (counts, sums, specific records).
-    - visu: requests to visualize or chart data.
+    - visu: requests to visualize or chart data. Exact data from a prior specialist in this
+    turn (e.g. sql) is passed through automatically, you do not need to repeat numbers in
+    current_task, just describe what to chart.
     - convo: you can answer directly, no specialist needed (definitions, small talk, clarifying your
     own prior answer, or synthesizing/rephrasing when a plain specialist result isn't enough on its own).
     - clarification: the request could genuinely map to more than one route and cannot be
@@ -66,35 +68,94 @@ def supervisor_agent(state: SupervisorState) -> dict:
     it into the state update the graph applies.
     """
 
+    task_history = list(state.task_history)
+
+    if state.last_result is not None and state.current_task:
+        current_turn = get_current_turn(state)
+
+        task_record = TaskRecord(
+            turn=current_turn,
+            route=state.last_result.source,
+            task=state.current_task,
+            status=state.last_result.status,
+            result_summary=state.last_result.summary,
+            issue=state.last_result.issue,
+        )
+
+        task_history.append(task_record)
+
+        print(
+            "[SUPERVISOR] recorded task: "
+            f"turn={current_turn} "
+            f"route={task_record.route!r} "
+            f"task={task_record.task!r} "
+            f"status={task_record.status!r}"
+        )
+
+    # ---------------------------------------------------------
+    # 2. Build context using the updated history
+    # ---------------------------------------------------------
+
+    context = gather_context(
+        state=state,
+        task_history=task_history,
+    )
+
     model = llm()  
-    
-    context = gather_context(state)
 
     try:
         decision = get_supervisor_decision(context, model)
     except Exception as e:
-        # infra-level failure (network, rate limit, provider outage),
-        # distinct from a validation failure, let it propagate rather
-        # than silently defaulting to clarification
+
         raise RuntimeError(f"Supervisor LLM call failed: {e}") from e
 
     print(f"[SUPERVISOR] decision.next={decision.next!r} current_task={decision.current_task!r}")
 
-    return map_to_state(decision)
+    decision = enforce_task_history_guard(
+        state=state,
+        decision=decision,
+        task_history=task_history,
+    )
 
+    update = map_to_state(decision)
+    update["task_history"] = task_history
 
+    return update
 
-def gather_context(state: SupervisorState) -> dict:
+def get_current_turn(state: SupervisorState) -> int:
     """
-    Pulls the minimum needed from state to build the routing prompt.
-    Doesn't touch messages directly here beyond what's needed;
-    the Supervisor gets full history, but we're explicit about
-    what's passed forward so build_prompt isn't reaching into state itself.
+    Derive the current user-turn number from the conversation.
+
+    Specialist execution does not create new HumanMessages, so the number
+    stays constant throughout one workflow execution.
+
+    A genuinely new user request adds another HumanMessage and therefore
+    gets a new turn number.
     """
-    print(f"[GATHER_CONTEXT] {len(state.messages)} messages, last_result={state.last_result!r}")
+
+    human_message_count = sum(
+        1
+        for message in state.messages
+        if isinstance(message, HumanMessage)
+    )
+
+    return max(human_message_count, 1)
+
+def gather_context(
+    state: SupervisorState,
+    task_history: list[TaskRecord],
+) -> dict:
+    print(
+        f"[GATHER_CONTEXT] "
+        f"{len(state.messages)} messages, "
+        f"last_result={state.last_result!r}, "
+        f"task_history={len(task_history)} records"
+    )
+
     return {
         "messages": state.messages,
-        "last_result": state.last_result,  # None if this is the first turn
+        "last_result": state.last_result,
+        "task_history": task_history,
     }
 
 
@@ -151,17 +212,88 @@ def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> Supe
         current_task="The supervisor could not determine which capability should handle the request.",
     )
 
+def enforce_task_history_guard(
+    state: SupervisorState,
+    decision: SupervisorDecision,
+    task_history: list[TaskRecord],
+) -> SupervisorDecision:
+    """
+    Deterministic protection against an exact repeat of a completed task
+    within the same user turn.
+
+    This does NOT prevent a specialist from running multiple times.
+    It only prevents this pattern:
+
+        visu("create chart X") -> done
+        visu("create chart X") -> done
+        visu("create chart X") -> ...
+
+    A different task remains valid:
+
+        research("find X") -> done
+        research("find Y") -> done
+    """
+
+    if decision.next == "end":
+        return decision
+
+    if decision.next not in (
+        "rag",
+        "convo",
+        "sql",
+        "research",
+        "visu",
+    ):
+        return decision
+
+    current_turn = get_current_turn(state)
+
+    proposed_task = (decision.current_task or "").strip()
+
+    if not proposed_task:
+        return decision
+
+    for record in reversed(task_history):
+        # Only compare work from this user's current turn.
+        if record.turn != current_turn:
+            continue
+
+        # Failed/partial work may legitimately be retried.
+        if record.status != "done":
+            continue
+
+        if record.route != decision.next:
+            continue
+
+        if record.task.strip() != proposed_task:
+            continue
+
+        # Exact same completed task requested again.
+        print(
+            "[SUPERVISOR GUARD] blocked duplicate completed task: "
+            f"route={decision.next!r}, "
+            f"task={proposed_task!r}"
+        )
+
+        return SupervisorDecision(
+            next="end",
+            current_task="",
+        )
+
+    return decision
+
+
 def map_to_state(decision: SupervisorDecision) -> dict:
-    
-    if decision.next != "end":
+  
+    if decision.next in ("end", "visu"):
         update = {
                 "next": decision.next,
                 "current_task": decision.current_task,
-                "last_result": None,  
             }
     else:
         update = {
                 "next": decision.next,
                 "current_task": decision.current_task,
+                "last_result": None,
             }
     return update
