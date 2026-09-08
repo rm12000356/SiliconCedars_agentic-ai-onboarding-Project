@@ -48,7 +48,18 @@ You must respond with a structured decision containing:
 - reason: a short and clear explanation of why you made this choice
 """
 
+MAX_RESEARCH_ATTEMPTS = 3
+
+
 def Sub_controler(state: SubGraphSupervisorState) -> dict:
+
+    if state.research_attempts >= MAX_RESEARCH_ATTEMPTS:
+        print(
+            f"[SUB-SUPERVISOR] research_attempts={state.research_attempts} >= "
+            f"{MAX_RESEARCH_ATTEMPTS}, forcing report regardless of LLM decision"
+        )
+        return {"next": "report"}
+
     model = llm().with_structured_output(SubDecision)
 
     messages = [
@@ -69,4 +80,9 @@ def Sub_controler(state: SubGraphSupervisorState) -> dict:
 
     print(f"[SUB-SUPERVISOR] next={decision.next} | reason={decision.reason}")
 
-    return {"next": decision.next}
+    update: dict[str, object] = {"next": decision.next}
+
+    if decision.next == "researcher":
+        update["research_attempts"] = state.research_attempts + 1
+
+    return update
