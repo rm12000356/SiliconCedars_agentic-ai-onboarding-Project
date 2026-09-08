@@ -20,7 +20,8 @@ SpecialistRoute = Literal[
     "convo",
     "sql",
     "research",
-    "visu"]
+    "visu"
+]
 
 SubRoute = Literal[
     "researcher",
@@ -82,4 +83,9 @@ class SubGraphSupervisorState(BaseModel):
     )
     task: str = Field(
         description="The research task handed down from the main Supervisor's current_task."
+    )
+    research_attempts: int = Field(
+        default=0,
+        description="Deterministic count of how many times Research has been "
+                    "invoked for this task."
     )
