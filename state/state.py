@@ -158,6 +158,16 @@ class SubGraphSupervisorState(BaseModel):
         description="Set by Report_W as a structural signal, not inferred from "
                     "the report's tone."
     )
+    report_written: bool = Field(
+        default=False,
+        description="Set to True by Report_W once it has produced a final "
+                    "report. Sub_controler checks this FIRST, before any other "
+                    "logic, and forces 'end' unconditionally once true. Without "
+                    "this, forcing next='report' after exhausting attempts "
+                    "creates an infinite loop: report always edges back to "
+                    "controler, and controler kept re-forcing 'report' forever "
+                    "since attempts stays >= the ceiling permanently."
+    )
 
 
 class ChartSpec(BaseModel):
