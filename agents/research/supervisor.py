@@ -53,7 +53,11 @@ MAX_RESEARCH_ATTEMPTS = 3
 
 def Sub_controler(state: SubGraphSupervisorState) -> dict:
 
-    if state.research_attempts >= MAX_RESEARCH_ATTEMPTS:
+    if state.report_written:
+        print("[SUB-SUPERVISOR] report already written, ending research subgraph")
+        return {"next": "end"}
+    
+    if state.research_attempts > MAX_RESEARCH_ATTEMPTS:
         print(
             f"[SUB-SUPERVISOR] research_attempts={state.research_attempts} >= "
             f"{MAX_RESEARCH_ATTEMPTS}, forcing report regardless of LLM decision"
