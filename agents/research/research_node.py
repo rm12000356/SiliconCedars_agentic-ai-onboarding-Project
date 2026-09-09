@@ -25,11 +25,21 @@ def make_research_node(subgraph):
 
         sub_output = subgraph.invoke(sub_input)
 
-        result = SpecialistResult(
-            source="research",
-            summary=sub_output["messages"][-1].content,
-            status="done",
-        )
+        succeeded = sub_output.get("research_succeeded")
+
+        if succeeded:
+            result = SpecialistResult(
+                source="research",
+                summary=sub_output["messages"][-1].content,
+                status="done",
+            )
+        else:
+            result = SpecialistResult(
+                source="research",
+                summary=sub_output["messages"][-1].content,
+                status="failed",
+                issue="research_no_results",
+            )
 
         return {"last_result": result}
 

@@ -4,7 +4,6 @@ from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from graph.workflow import Main_WorkFlow
 from agents.clarification import resume_clarification
-from state.state import SupervisorState
 
 
 def run():
@@ -30,7 +29,7 @@ def run():
             break
 
         result = graph.invoke(
-            SupervisorState(messages=[HumanMessage(content=user_input)]),
+            {"messages": [HumanMessage(content=user_input)]},
             config=config,
         )
 

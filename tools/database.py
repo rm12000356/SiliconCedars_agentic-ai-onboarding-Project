@@ -26,19 +26,15 @@ def get_salary(employee_id: int) -> dict:
 @tool
 def get_user_credential(user_id: int) -> dict:
     """
-    Same pattern as get_salary. Placeholder for whatever real
-    credential lookup this eventually needs to do.
     """
     with get_elevated_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT password_hash FROM credentials WHERE user_id = %s",
+                "SELECT 1 FROM credentials WHERE user_id = %s",
                 (user_id,),
             )
             row = cur.fetchone()
-            if row is None:
-                return {"found": False}
-            return {"found": True, "password_hash": row[0]}
+            return {"found": row is not None}
 
 @tool
 def run_general_query(query_text: str) -> list[dict]:
@@ -47,10 +43,11 @@ def run_general_query(query_text: str) -> list[dict]:
     connection. Security here comes entirely from the role's grants,
     not from parsing or validating the SQL text itself.
     """
-    if sql is None:
-            raise RuntimeError(
-                "run_general_query called with sql=None. A valid SQL statement is required."
-            )
+    if not query_text:
+        raise RuntimeError(
+            "run_general_query called with an empty query_text. A valid "
+            "SQL statement is required."
+        )
     with get_general_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(sql.SQL(query_text))
@@ -62,11 +59,6 @@ def run_general_query(query_text: str) -> list[dict]:
             columns = [desc[0] for desc in cur.description]
             rows = cur.fetchall()
             return [dict(zip(columns, row)) for row in rows]
-
-
-
-
-
 
 GENERAL_TOOLS = [run_general_query]
 ELEVATED_TOOLS = [get_salary, get_user_credential]

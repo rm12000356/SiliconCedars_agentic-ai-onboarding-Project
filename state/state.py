@@ -189,3 +189,19 @@ class ChartSpec(BaseModel):
         if any(not label.strip() for label in labels):
             raise ValueError("Chart labels cannot be empty.")
         return labels
+
+class ExtractedFact(BaseModel):
+    key: str = Field(
+        description="Short snake_case key, e.g. 'name', 'department', "
+                    "'preference_chart_type'."
+    )
+    value: str = Field(description="The fact's value.")
+
+class FactExtraction(BaseModel):
+    facts: list[ExtractedFact] = Field(
+        default_factory=list,
+        description="Durable facts worth remembering across conversations: "
+                    "name, department/role, stated preferences. Empty list "
+                    "if nothing new or memorable was said. Do not extract "
+                    "task-specific or one-off details, only standing facts.",
+    )
