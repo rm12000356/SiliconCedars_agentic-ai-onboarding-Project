@@ -17,13 +17,11 @@ def get_checkpointer():
     if backend == "postgres":
         conn_string = os.getenv("DATABASE_URL")
         if not conn_string:
-            raise ValueError("DATABASE_URL must be set when CHECKPOINT_BACKEND is postgres")
+            raise ValueError(
+                "DATABASE_URL must be set when CHECKPOINT_BACKEND is postgres"
+            )
 
-        # from_conn_string is a context manager – enter it so the connection is live
-        saver = PostgresSaver.from_conn_string(conn_string)
-        checkpointer = saver.__enter__()
-        checkpointer.setup()          # creates the checkpoint tables if needed
-        return checkpointer
+        return PostgresSaver.from_conn_string(conn_string)
 
     return MemorySaver()
 
