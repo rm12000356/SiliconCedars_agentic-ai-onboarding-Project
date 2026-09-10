@@ -1,4 +1,10 @@
+"""DB role boundary. Requires a live Postgres with 02_roles.sql applied."""
+
+import pytest
 from db.connection import get_general_connection
+from tests.conftest import requires_db
+
+pytestmark = [pytest.mark.integration, requires_db]
 
 
 def test_general_role_cannot_query_salaries():
@@ -20,9 +26,3 @@ def test_general_role_cannot_see_salaries_in_metadata():
             row = cur.fetchone()
             assert row is None, "salaries table should be invisible to general_role, but it was found"
             print("Confirmed: salaries is invisible to general_role")
-
-
-if __name__ == "__main__":
-    test_general_role_cannot_query_salaries()
-    test_general_role_cannot_see_salaries_in_metadata()
-    print("All role-boundary tests passed.")
