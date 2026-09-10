@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
-
+from services.memory import get_checkpointer
 from agents.finalize import Finalize
 from agents.memory_manager import memory_manager
 from state.state import SupervisorState, SubGraphSupervisorState
@@ -65,14 +65,14 @@ def Main_WorkFlow():
     builder.add_edge("finalize", END)
 
 
-    memory = MemorySaver()
+    memory = get_checkpointer()
 
     graph =builder.compile(checkpointer=memory)
 
-    png = graph.get_graph().draw_mermaid_png()
+    #png = graph.get_graph().draw_mermaid_png()
 
-    with open("graph_structure.png", "wb") as f:
-        f.write(png)
+    #with open("graph_structure.png", "wb") as f:
+    #    f.write(png)
         
     return graph
 
@@ -101,10 +101,10 @@ def sub_workflow():
 
     graph =builder.compile()
     
-    png = graph.get_graph().draw_mermaid_png()
+    #png = graph.get_graph().draw_mermaid_png()
 
-    with open("SubGraph_structure.png", "wb") as f:
-        f.write(png)
+    #with open("SubGraph_structure.png", "wb") as f:
+    #    f.write(png)
         
     return graph
 

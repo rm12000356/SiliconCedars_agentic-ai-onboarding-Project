@@ -12,18 +12,18 @@ load_dotenv()
 
 
 def get_checkpointer():
-    """
-    Returns the checkpointer configured in settings.
-    """
     backend = os.getenv("CHECKPOINT_BACKEND", "memory").lower()
 
     if backend == "postgres":
-
         conn_string = os.getenv("DATABASE_URL")
-
-        if conn_string is None:
+        if not conn_string:
             raise ValueError("DATABASE_URL must be set when CHECKPOINT_BACKEND is postgres")
-        return PostgresSaver.from_conn_string(conn_string)
+
+        # from_conn_string is a context manager – enter it so the connection is live
+        saver = PostgresSaver.from_conn_string(conn_string)
+        checkpointer = saver.__enter__()
+        checkpointer.setup()          # creates the checkpoint tables if needed
+        return checkpointer
 
     return MemorySaver()
 
