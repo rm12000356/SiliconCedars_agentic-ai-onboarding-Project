@@ -16,13 +16,7 @@ def test_route_supervisor_raises_on_none():
     with pytest.raises(RuntimeError, match="state.next is None"):
         route_supervisor(state)
 
-
 def test_route_supervisor_raises_on_corrupted_value():
-    # A real SupervisorState can't hold an invalid route (Pydantic's
-    # Literal type would reject it at construction), so this uses a
-    # bare mock object to simulate the "state corruption" scenario
-    # route_supervisor defends against, a value that bypassed the
-    # type system entirely, not something reachable through normal use.
     fake_state = cast(SupervisorState, SimpleNamespace(next="not_a_real_route"))
     with pytest.raises(RuntimeError, match="State corruption"):
         route_supervisor(fake_state)

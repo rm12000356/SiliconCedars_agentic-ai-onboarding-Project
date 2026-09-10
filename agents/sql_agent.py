@@ -4,6 +4,7 @@ from state.state import SupervisorState, SpecialistResult
 from services.llm import llm
 from tools.database import GENERAL_TOOLS, ELEVATED_TOOLS
 from decimal import Decimal
+from groq import BadRequestError
 
 
 def _extract_chartable_rows(tool_output) -> list[dict] | None:
@@ -96,7 +97,17 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
 
     for i in range(max_iterations):
         print(f"[SQL] iteration {i + 1}/{max_iterations}")
-        response = model.invoke(messages)
+        try:
+            response = model.invoke(messages)
+        except BadRequestError:
+            return {
+                "last_result": SpecialistResult(
+                    source="sql",
+                    summary="This request requires data or tools that are not available for the current permission level.",
+                    status="failed",
+                    issue="permission_denied",
+                )
+            }
         messages.append(response)
 
         if not response.tool_calls:

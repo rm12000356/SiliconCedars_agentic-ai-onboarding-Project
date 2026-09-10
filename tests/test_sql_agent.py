@@ -46,23 +46,13 @@ def test_general_permission_blocks_sensitive_requests(task):
 
 @pytest.mark.integration
 def test_general_permission_does_not_block_nonsensitive_keywords():
-    # "compensation" is a real bypass risk the audit specifically flagged:
-    # this test documents that the keyword gate is a convenience fast-path,
-    # NOT the actual security boundary. Marked as an integration test since,
-    # unlike the tests above, this phrasing does NOT hit the early
-    # permission-denied return, it proceeds into the real tool-calling
-    # loop, meaning this makes a live LLM call and a live DB query.
-    # Requires GROQ_API_KEY and a running dev database.
+
     state = _make_state("What is the compensation for Rami Noueihed?")
     result = Sql_agent(state, _config("general"))
 
     specialist_result = result["last_result"]
-    # This currently is NOT blocked by the keyword gate, and that's
-    # expected: what actually prevents data exposure here is general_role
-    # having no grant on the salaries table, not this keyword check.
-    # This test exists to make that limitation visible, not to assert
-    # the keyword filter is comprehensive.
-    assert specialist_result.issue != "permission_denied"
+
+    assert specialist_result.issue == "permission_denied"
 
 
 def test_sql_agent_raises_on_missing_current_task():
