@@ -123,6 +123,13 @@ class SupervisorState(BaseModel):
             "Tracks what task was done and what result came from it."
         )
     )
+    turn_count: int = Field(
+        default=0,
+        description=(
+            "turn counter, set exactly once per external graph.invoke() call by memory_manager "
+            "(the graph's entry node)"
+        )
+    )
 
 
 class SubGraphSupervisorState(BaseModel):
@@ -150,6 +157,16 @@ class SubGraphSupervisorState(BaseModel):
         default=None,
         description="Set by Report_W as a structural signal, not inferred from "
                     "the report's tone."
+    )
+    report_written: bool = Field(
+        default=False,
+        description="Set to True by Report_W once it has produced a final "
+                    "report. Sub_controler checks this FIRST, before any other "
+                    "logic, and forces 'end' unconditionally once true. Without "
+                    "this, forcing next='report' after exhausting attempts "
+                    "creates an infinite loop: report always edges back to "
+                    "controler, and controler kept re-forcing 'report' forever "
+                    "since attempts stays >= the ceiling permanently."
     )
 
 
@@ -182,3 +199,19 @@ class ChartSpec(BaseModel):
         if any(not label.strip() for label in labels):
             raise ValueError("Chart labels cannot be empty.")
         return labels
+
+class ExtractedFact(BaseModel):
+    key: str = Field(
+        description="Short snake_case key, e.g. 'name', 'department', "
+                    "'preference_chart_type'."
+    )
+    value: str = Field(description="The fact's value.")
+
+class FactExtraction(BaseModel):
+    facts: list[ExtractedFact] = Field(
+        default_factory=list,
+        description="Durable facts worth remembering across conversations: "
+                    "name, department/role, stated preferences. Empty list "
+                    "if nothing new or memorable was said. Do not extract "
+                    "task-specific or one-off details, only standing facts.",
+    )

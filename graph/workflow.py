@@ -1,7 +1,8 @@
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
-
+from services.memory import get_checkpointer
 from agents.finalize import Finalize
+from agents.memory_manager import memory_manager
 from state.state import SupervisorState, SubGraphSupervisorState
 
 from graph.routing import route_supervisor, route_sub_supervisor
@@ -26,6 +27,7 @@ def Main_WorkFlow():
     builder = StateGraph(SupervisorState)
 
     
+    builder.add_node("memory_manager", memory_manager)
     builder.add_node("supervisor", supervisor_agent)
     builder.add_node("rag", RAG)
     builder.add_node("convo", Convo)
@@ -36,7 +38,8 @@ def Main_WorkFlow():
     builder.add_node("finalize", Finalize)
 
     
-    builder.add_edge(START, "supervisor")
+    builder.add_edge(START, "memory_manager")
+    builder.add_edge("memory_manager", "supervisor")
 
     builder.add_conditional_edges(
     "supervisor",
@@ -62,14 +65,14 @@ def Main_WorkFlow():
     builder.add_edge("finalize", END)
 
 
-    memory = MemorySaver()
+    memory = get_checkpointer()
 
     graph =builder.compile(checkpointer=memory)
 
-    png = graph.get_graph().draw_mermaid_png()
+    #png = graph.get_graph().draw_mermaid_png()
 
-    with open("graph_structure.png", "wb") as f:
-        f.write(png)
+    #with open("graph_structure.png", "wb") as f:
+    #    f.write(png)
         
     return graph
 
@@ -98,10 +101,10 @@ def sub_workflow():
 
     graph =builder.compile()
     
-    png = graph.get_graph().draw_mermaid_png()
+    #png = graph.get_graph().draw_mermaid_png()
 
-    with open("SubGraph_structure.png", "wb") as f:
-        f.write(png)
+    #with open("SubGraph_structure.png", "wb") as f:
+    #    f.write(png)
         
     return graph
 

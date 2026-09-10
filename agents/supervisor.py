@@ -1,10 +1,12 @@
 from __future__ import annotations
 from typing import Optional
 from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 from pydantic import ValidationError
 from state.state import SupervisorState, TaskRecord, SpecialistResult
 from state.structure_output import SupervisorDecision
 from services.llm import llm
+from services.memory import format_facts_for_prompt
 
 MAX_HOPS_PER_TURN = 6
 MAX_SAME_ROUTE_PER_TURN = 2
@@ -27,7 +29,7 @@ For end, current_task can be empty.
 """
 
 
-def supervisor_agent(state: SupervisorState) -> dict:
+def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
     """
     1. Record the previous specialist result into task_history (if any).
     2. Try a deterministic decision.
@@ -60,7 +62,8 @@ def supervisor_agent(state: SupervisorState) -> dict:
 
     if decision is None:
         # ----- 3. LLM residual case -----
-        context = gather_context(state, task_history)
+        user_id = (config.get("configurable") or {}).get("user_id")
+        context = gather_context(state, task_history, user_id)
         try:
             decision = get_supervisor_decision(context, llm())
         except Exception as e:
@@ -274,21 +277,28 @@ def enforce_task_history_guard(
 def gather_context(
     state: SupervisorState,
     task_history: list[TaskRecord],
+    user_id: str | None = None,
 ) -> dict:
+    known_facts = format_facts_for_prompt(user_id) if user_id else ""
     print(
         f"[GATHER_CONTEXT] {len(state.messages)} messages, "
         f"last_result={state.last_result!r}, "
-        f"task_history={len(task_history)} records"
+        f"task_history={len(task_history)} records, "
+        f"known_facts={'yes' if known_facts else 'none'}"
     )
     return {
         "messages": state.messages,
         "last_result": state.last_result,
         "task_history": task_history,
+        "known_facts": known_facts,
     }
 
 
 def build_prompt(context: dict, previous_error: str | None = None) -> list:
     messages = [SystemMessage(content=SUPERVISOR_SYSTEM_PROMPT)]
+
+    if context.get("known_facts"):
+        messages.append(SystemMessage(content=context["known_facts"]))
 
     if context["last_result"] is not None:
         lr = context["last_result"]
@@ -364,10 +374,7 @@ def get_supervisor_decision(
 
 
 def get_current_turn(state: SupervisorState) -> int:
-    human_count = sum(
-        1 for m in state.messages if isinstance(m, HumanMessage)
-    )
-    return max(human_count, 1)
+    return state.turn_count
 
 
 def map_to_state(decision: SupervisorDecision) -> dict:

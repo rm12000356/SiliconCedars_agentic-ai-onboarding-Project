@@ -1,28 +1,30 @@
-import uuid
+import os
 from langchain_core.messages import HumanMessage
-
 from langchain_core.runnables import RunnableConfig
+
 from graph.workflow import Main_WorkFlow
 from agents.clarification import resume_clarification
-from state.state import SupervisorState
 
 
 def run():
     graph = Main_WorkFlow()
 
-    # No auth/identity layer wired up yet, so thread_id is just a fresh
-    # random session per process run. Ties to the user_id/thread_id
-    # design in the handoff doc once auth actually exists.
-    thread_id = str(uuid.uuid4())
+    # Stable identities – same values across restarts so the checkpointer
+    # and long-term memory keep working.
+    user_id = os.getenv("DEFAULT_USER_ID", "test-user-1")
+    thread_id = os.getenv("DEFAULT_THREAD_ID", "thread-test-user-1")
+    permission_level = os.getenv("DEFAULT_PERMISSION_LEVEL", "elevated")
+
     config: RunnableConfig = {
         "configurable": {
             "thread_id": thread_id,
-            "user_id": "test-user-1",         # static stand-in until real auth exists
-            "permission_level": "elevated",     # flip to "elevated" manually to test the gate
+            "user_id": user_id,
+            "permission_level": permission_level,
         },
     }
 
     print("Company Intelligence Assistant. Type 'quit' to exit.")
+    print(f"(user={user_id} | thread={thread_id} | permission={permission_level})")
 
     while True:
         user_input = input("\nYou: ").strip()
@@ -30,12 +32,10 @@ def run():
             break
 
         result = graph.invoke(
-            SupervisorState(messages=[HumanMessage(content=user_input)]),
+            {"messages": [HumanMessage(content=user_input)]},
             config=config,
         )
 
-        # A single turn can pause more than once if the Supervisor
-        # routes to clarification, gets an answer, and is still unsure.
         while "__interrupt__" in result:
             interrupt_payload = result["__interrupt__"][0].value
             question = interrupt_payload["question"]
