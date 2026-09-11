@@ -17,3 +17,8 @@ class SupervisorDecision(BaseModel):
                     "For convo specifically, this is a pre-summary of relevant "
                     "conversation context instead of a task instruction."
     )
+
+class ClarificationOutput(BaseModel):
+    question: str = Field(
+        description="The single clarification question to ask the user."
+    )

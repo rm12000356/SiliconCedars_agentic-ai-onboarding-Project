@@ -19,7 +19,7 @@ from agents.clarification import Clarification
 from agents.research.research_node import make_research_node
 
 
-def Main_WorkFlow():
+def Main_WorkFlow(memory = None):
 
     subgraph = sub_workflow()
 
@@ -65,7 +65,6 @@ def Main_WorkFlow():
     builder.add_edge("finalize", END)
 
 
-    memory = get_checkpointer()
 
     graph =builder.compile(checkpointer=memory)
 

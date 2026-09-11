@@ -95,26 +95,6 @@ def deterministic_decision(
         return SupervisorDecision(next="end", current_task="")
 
     if lr is not None:
-        # ---------------------------------------------------------------
-        # Special case: successful specialist that produced chartable data
-        # and the user is asking for a visualization → allow visu
-        # ---------------------------------------------------------------
-        if (
-            lr.status == "done"
-            and lr.structured_data
-            and _user_wants_visualization(state)
-        ):
-            print("[SUPERVISOR] structured_data present + visualization intent → visu")
-            return SupervisorDecision(
-                next="visu",
-                current_task="Create a clear chart from the structured_data of the previous result."
-            )
-
-        # Normal success → force end (prevents loops)
-        if lr.status == "done":
-            print("[SUPERVISOR] last_result status=done → end")
-            return SupervisorDecision(next="end", current_task="")
-
         # Terminal permission failure
         if lr.issue == "permission_denied":
             already_explained = any(
@@ -142,7 +122,6 @@ def deterministic_decision(
                     "Do not invent external research."
                 ),
             )
-
         # Same specialist already failed/partial once → explain & stop
         same_route_failures = [
             r for r in turn_history
@@ -162,37 +141,6 @@ def deterministic_decision(
         return SupervisorDecision(next="end", current_task="")
 
     return None  # residual → LLM
-
-
-def _user_wants_visualization(state: SupervisorState) -> bool:
-    """Very lightweight intent check  only looks at the latest human message."""
-    if not state.messages:
-        return False
-
-    last_human_content = None
-    for m in reversed(state.messages):
-        if isinstance(m, HumanMessage):
-            last_human_content = m.content
-            break
-
-    if last_human_content is None:
-        return False
-
-    # content can be str or list (multimodal). Normalize to a single lowercase string.
-    if isinstance(last_human_content, list):
-        # join any text parts
-        text_parts = []
-        for part in last_human_content:
-            if isinstance(part, str):
-                text_parts.append(part)
-            elif isinstance(part, dict) and part.get("type") == "text":
-                text_parts.append(str(part.get("text", "")))
-        text = " ".join(text_parts).lower()
-    else:
-        text = str(last_human_content).lower()
-
-    keywords = ["chart", "graph", "plot", "visualize", "visualise", "bar", "pie", "line chart"]
-    return any(k in text for k in keywords)
 
 
 def post_decision_guards(
@@ -300,6 +248,19 @@ def build_prompt(context: dict, previous_error: str | None = None) -> list:
     if context.get("known_facts"):
         messages.append(SystemMessage(content=context["known_facts"]))
 
+    if context["task_history"]:
+        history_text = "\n".join(
+            f"- turn={record.turn}, route={record.route}, "
+            f"task={record.task}, status={record.status}, "
+            f"summary={record.result_summary or 'none'}"
+            for record in context["task_history"]
+        )
+        messages.append(
+            SystemMessage(
+                content=f"Task execution history:\n{history_text}"
+            )
+        )
+
     if context["last_result"] is not None:
         lr = context["last_result"]
         messages.append(
@@ -312,7 +273,7 @@ def build_prompt(context: dict, previous_error: str | None = None) -> list:
             )
         )
 
-    recent = context["messages"][-6:] if len(context["messages"]) > 6 else context["messages"]
+    recent = context["messages"][-8:] if len(context["messages"]) > 8 else context["messages"]
     messages.extend(recent)
 
     if previous_error:
