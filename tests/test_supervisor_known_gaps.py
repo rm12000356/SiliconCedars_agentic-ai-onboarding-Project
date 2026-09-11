@@ -99,11 +99,6 @@ def test_second_user_message_chart_that_should_auto_visu(monkeypatch):
     assert update["next"] == "visu"
 
 
-@pytest.mark.xfail(
-    reason="off-by-one: force-report uses research_attempts > MAX, not >= MAX",
-    strict=True,
-    raises=AssertionError,
-)
 def test_research_at_max_attempts_should_force_report_without_llm(monkeypatch):
     def boom(*_a, **_k):
         raise AssertionError("LLM must not be consulted at the attempt ceiling")

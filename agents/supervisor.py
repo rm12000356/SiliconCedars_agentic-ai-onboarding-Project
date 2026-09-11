@@ -129,7 +129,7 @@ def deterministic_decision(
    
     if lr is not None:
 
-        '''
+        
         if (
             lr.status == "done"
             and lr.structured_data
@@ -145,7 +145,7 @@ def deterministic_decision(
         if lr.status == "done":
             logger.debug("last_result_done_forcing_end")
             return SupervisorDecision(next="end", current_task="")
-        '''
+        
 
         if lr.source == "rag" and lr.issue == "rag_unavailable":
             return SupervisorDecision(
