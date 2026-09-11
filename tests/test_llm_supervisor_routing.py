@@ -121,6 +121,11 @@ VISU_CASES = [
     ("Visualize employee distribution with a pie chart.", frozenset({"visu", "sql"})),
     ("Create a bar plot of sales totals.", frozenset({"visu", "sql"})),
     ("Please visualize this as a pie chart.", frozenset({"visu"})),
+    ("Do a graph of employees and department. There are 3 departments X, Y, Z: 5 employees in X, 4 in Y, 3 in Z.",frozenset({"visu"}),),
+    ("Make a pie chart: 60% of sales came from EU, 25% from MENA, 15% from APAC.",frozenset({"visu"}),),
+    ("Chart this: Q1 revenue was 100k, Q2 was 150k, Q3 was 120k, Q4 was 200k.",frozenset({"visu"}),),
+    ("Plot a bar chart with these values — apples: 12, oranges: 7, bananas: 9.",frozenset({"visu"}),),
+    ("Visualize this data as a line chart: Jan 10, Feb 15, Mar 13, Apr 20.",frozenset({"visu"}),),
 ]
 
 CONVO_CASES = [
