@@ -61,7 +61,7 @@ async def main(message: cl.Message):
 
     thread_id = cl.context.session.thread_id
     user_id = "test-user-1"
-    permission_level = "elevated"
+    permission_level = os.getenv("DEFAULT_PERMISSION_LEVEL", "general")
 
     config: RunnableConfig = {
         "configurable": {
