@@ -23,9 +23,9 @@ def get_checkpointer():
         saver = PostgresSaver.from_conn_string(conn_string)
         checkpointer = saver.__enter__()
         checkpointer.setup()          # creates the checkpoint tables if needed
-        return checkpointer
+        return checkpointer , saver
 
-    return MemorySaver()
+    return MemorySaver(), None
 
 
 
