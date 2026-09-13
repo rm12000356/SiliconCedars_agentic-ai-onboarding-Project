@@ -282,5 +282,3 @@ LLM-as-judge correctness is used only when a reference answer exists.
 * **No cross-turn data chaining**
   Requests such as `"chart that"` after a previous `Finalize` are not supported. Same-turn SQL → visualization is supported.
 
-* **Generic web fetching**
-  Research uses generic web fetch. Bot-hardened websites, such as some weather sites, may fail honestly instead of requiring per-site tools.
