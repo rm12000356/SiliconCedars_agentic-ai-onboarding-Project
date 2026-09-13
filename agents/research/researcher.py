@@ -13,16 +13,18 @@ RESEARCHER_SYSTEM_PROMPT = """You are a research specialist.
 Your only job is to gather high-quality public information about the given task.
 
 Tools:
-- web_search(query): find relevant pages
-- fetch_page(url): read the main content of a specific page
+- web_search(query): find relevant pages (returns title, url, snippet)
+- fetch_page(url, snippet): read a page. Always pass snippet from the
+  matching search result. If the page is blocked, the snippet is used.
 
 Strategy:
-1. Start with a focused web_search
-2. From the results, select the most promising 1-3 URLs and fetch them
-3. If the information is still insufficient, you may refine the query and search again (max 2 searches total)
-4. When you have enough material, stop calling tools and write a clear intermediate research note that includes:
-   - Key findings
-   - Sources (title + url)
+1. web_search
+2. fetch 1-3 URLs, passing each hit's snippet
+3. If a fetch returns "[Page fetch failed...]", treat that snippet as
+   weak evidence. Do not invent. You may still write the note from
+   snippets if no full page loaded — mark those sources as snippets.
+4. When you have enough material, stop and write the research note
+   (key findings + sources).
 
 Rules:
 - Never invent information
@@ -30,26 +32,42 @@ Rules:
 - If after your attempts nothing useful is found, clearly state that.
 """
 
+WRITE_NOTE_NOW = (
+    "No more tool calls. Write the research note NOW from the search "
+    "snippets and any page text you already have. Include key findings "
+    "and sources (title + url). Mark snippet-only sources as snippets. "
+    "Do not invent numbers that were not in those texts."
+)
+
+
+def _final_note(messages: list) -> dict:
+    """One untool'd invoke so gathered snippets aren't thrown away."""
+    messages.append(HumanMessage(content=WRITE_NOTE_NOW))
+    try:
+        response = llm().invoke(messages)
+    except Exception as e:
+        print(f"[RESEARCH] final note failed: {type(e).__name__}: {e}")
+        return {
+            "messages": [
+                AIMessage(
+                    content=(
+                        "Research ended without a clean note. See tool "
+                        "results above for snippets and any fetched text."
+                    )
+                )
+            ]
+        }
+    if isinstance(response, AIMessage) and response.tool_calls:
+        response.tool_calls = []
+    return {"messages": [response]}
+
 
 def Research(state: SubGraphSupervisorState) -> dict:
-    """
-    Runs a bounded tool-calling loop to gather information. The loop's
-    internal scaffolding (system prompt, individual tool calls, raw
-    tool outputs like full fetched page text) stays entirely local to
-    this function call, it is never written to shared subgraph state.
-    Only the final condensed research note is persisted, since that's
-    the only part later steps (another research pass, the report
-    writer) actually need. This keeps state.messages small regardless
-    of how many tool calls happened internally to produce it.
-    """
     if not state.task:
         raise RuntimeError("Research node called with empty task")
 
     model = llm().bind_tools(TOOLS)
 
-    # Local scratchpad: previous condensed notes (if any) provide context
-    # for continuing, but the loop itself starts fresh each pass, it does
-    # not replay old raw tool transcripts.
     if not state.messages:
         prior_notes = ""
     else:
@@ -74,12 +92,12 @@ def Research(state: SubGraphSupervisorState) -> dict:
     ]
 
     search_attempts = 0
+    fetch_done = False
 
     for _ in range(MAX_ITERATIONS):
         try:
             response = model.invoke(messages)
         except Exception as e:
-        
             print(f"[RESEARCH] model call failed: {type(e).__name__}: {e}")
             messages.append(
                 HumanMessage(
@@ -95,7 +113,6 @@ def Research(state: SubGraphSupervisorState) -> dict:
         messages.append(response)
 
         if not response.tool_calls:
-
             return {"messages": [response]}
 
         for call in response.tool_calls:
@@ -104,7 +121,7 @@ def Research(state: SubGraphSupervisorState) -> dict:
             tool_fn = TOOLS_BY_NAME.get(name)
 
             print(f"[RESEARCH] tool call: {name} args={args}")
-            
+
             if tool_fn is None:
                 result = f"Unknown tool: {name}"
                 print(f"[RESEARCH] unknown tool requested: {name}")
@@ -113,10 +130,17 @@ def Research(state: SubGraphSupervisorState) -> dict:
                     if name == "web_search":
                         search_attempts += 1
                         if search_attempts > MAX_SEARCH_ATTEMPTS:
-                            result = "Maximum search attempts reached. Do not search again."
+                            result = (
+                                "Maximum search attempts reached. "
+                                "Do not search again. Fetch remaining URLs "
+                                "from the first search or write the note."
+                            )
                             print("[RESEARCH] search attempt limit hit")
                         else:
                             result = tool_fn.invoke(args)
+                    elif name == "fetch_page":
+                        result = tool_fn.invoke(args)
+                        fetch_done = True
                     else:
                         result = tool_fn.invoke(args)
                 except Exception as e:
@@ -126,9 +150,9 @@ def Research(state: SubGraphSupervisorState) -> dict:
             print(f"[RESEARCH] tool result: {str(result)[:300]!r}")
             messages.append(ToolMessage(content=str(result), tool_call_id=call["id"]))
 
-    print("[RESEARCH] max iterations reached without a final note")
-    return {
-        "messages": [
-            AIMessage(content="Research did not reach a conclusion within the allowed steps.")
-        ]
-    }
+        if search_attempts >= MAX_SEARCH_ATTEMPTS and fetch_done:
+            print("[RESEARCH] search cap + fetch done → forcing final note")
+            return _final_note(messages)
+
+    print("[RESEARCH] max iterations reached → forcing final note")
+    return _final_note(messages)

@@ -123,17 +123,28 @@ def web_search(query: str) -> list[dict]:
         ) from e
 
 
-@tool
-def fetch_page(url: str) -> str:
-    """
-    Fetch and extract the main text content of a webpage.
-    Returns a cleaned, truncated version of the page content
-    suitable for research (max ~4500 characters).
+def _snippet_fallback(url: str, snippet: str, reason: str) -> str:
+    text = (snippet or "").strip()
+    if not text:
+        raise RuntimeError(
+            f"Failed to fetch page ({reason}) and no search snippet was provided. url={url}"
+        )
+    return (
+        f"[Page fetch failed: {reason}]\n"
+        f"Source: {url}\n"
+        f"Using DuckDuckGo snippet as fallback:\n{text}"
+    )
 
-    Returns an empty string if the page has no usable text.
-    Raises an exception if the request itself fails, the target is
-    blocked (internal/private network, disallowed port), or the
-    content isn't text/HTML.
+
+@tool
+def fetch_page(url: str, snippet: str = "") -> str:
+    """
+    Fetch and extract the main text of a webpage (max ~4500 characters).
+
+    Always pass `snippet` from the matching web_search result. If the
+    page cannot be fetched (403, timeout, non-HTML, empty body), that
+    snippet is returned as a labeled fallback instead of failing the
+    research pass. Internal/private URLs still raise (no snippet bypass).
     """
     if not url or not url.strip():
         raise ValueError("URL cannot be empty")
@@ -173,14 +184,16 @@ def fetch_page(url: str) -> str:
         else:
             raise RuntimeError(f"Too many redirects (> {MAX_REDIRECTS})")
 
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as e:
+            code = getattr(e.response, "status_code", "?")
+            return _snippet_fallback(url, snippet, f"HTTP {code}")
 
         content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
-
         if not content_type or not any(content_type.startswith(t) for t in ALLOWED_CONTENT_TYPES):
-            raise ValueError(
-                f"Unsupported or missing content type for research: {content_type!r} "
-                f"(url: {current_url})"
+            return _snippet_fallback(
+                url, snippet, f"unsupported content type {content_type!r}"
             )
 
         raw_bytes = b""
@@ -191,29 +204,32 @@ def fetch_page(url: str) -> str:
         text_content = raw_bytes.decode(response.encoding or "utf-8", errors="replace")
 
         soup = BeautifulSoup(text_content, "html.parser")
-
         for tag in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
             tag.decompose()
 
         text = soup.get_text(separator="\n", strip=True)
-
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         clean_text = "\n".join(lines)
 
         if not clean_text:
-            return ""
+            return _snippet_fallback(url, snippet, "empty page body")
 
         if len(clean_text) > MAX_CHARS:
             clean_text = clean_text[:MAX_CHARS] + "\n\n[Content truncated]"
 
         return clean_text
-    
 
     except requests.RequestException as e:
-        raise RuntimeError(
-            f"Failed to fetch page: {type(e).__name__}: {e}"
-        ) from e
-    except (ValueError, RuntimeError):
+        try:
+            return _snippet_fallback(url, snippet, f"{type(e).__name__}: {e}")
+        except RuntimeError:
+            raise RuntimeError(
+                f"Failed to fetch page: {type(e).__name__}: {e}"
+            ) from e
+    except ValueError:
+        # SSRF / scheme / port / blocked IP — never fall back to snippet
+        raise
+    except RuntimeError:
         raise
     except Exception as e:
         raise RuntimeError(
