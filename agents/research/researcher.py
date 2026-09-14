@@ -49,7 +49,7 @@ def _final_note(messages: list) -> dict:
     except Exception as e:
         print(f"[RESEARCH] final note failed: {type(e).__name__}: {e}")
         return {
-            "messages": [
+            "research_messages": [
                 AIMessage(
                     content=(
                         "Research ended without a clean note. See tool "
@@ -63,7 +63,7 @@ def _final_note(messages: list) -> dict:
     if isinstance(response, AIMessage) and response.tool_calls:
         response.tool_calls = []
 
-    return {"messages": [response]}
+    return {"research_messages": [response]}
 
 
 def Research(state: SubGraphSupervisorState) -> dict:
@@ -73,11 +73,11 @@ def Research(state: SubGraphSupervisorState) -> dict:
     model = llm().bind_tools(TOOLS)
 
     # Collect any previous research notes already in the subgraph
-    if not state.messages:
+    if not state.research_messages:
         prior_notes = ""
     else:
         prior_notes = "\n\n".join(
-            str(m.content) for m in state.messages if isinstance(m, AIMessage)
+            str(m.content) for m in state.research_messages if isinstance(m, AIMessage)
         )
 
     task_prompt = f"Research task: {state.task}"
@@ -119,7 +119,7 @@ def Research(state: SubGraphSupervisorState) -> dict:
 
         # Model decided to stop → return its final answer
         if not response.tool_calls:
-            return {"messages": [response]}
+            return {"research_messages": [response]}
 
         # Execute tool calls
         for call in response.tool_calls:

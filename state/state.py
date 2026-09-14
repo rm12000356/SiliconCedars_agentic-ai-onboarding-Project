@@ -138,8 +138,12 @@ class SubGraphSupervisorState(BaseModel):
     boundary into the main graph, not this whole schema.
     """
     messages: Annotated[List[AnyMessage], add_messages] = Field(
-        description="Local message thread scoped to the research task, "
+        description="global message thread"
                     "not the full outer conversation."
+    )
+    research_messages: Annotated[List[AnyMessage], add_messages] = Field(
+        default_factory=list ,
+        description="local message scoped to the research task"
     )
     next: Optional[SubRoute] = Field(
         default=None,
@@ -169,6 +173,9 @@ class SubGraphSupervisorState(BaseModel):
                     "since attempts stays >= the ceiling permanently."
     )
 
+class SubDecision(BaseModel):
+    next: Literal["researcher", "report", "end"]
+    reason: str = Field(description="Short explanation of the decision")
 
 class ChartSpec(BaseModel):
     chart_type: Literal["bar", "line", "pie"] = Field(

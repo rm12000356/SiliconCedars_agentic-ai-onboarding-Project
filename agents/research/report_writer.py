@@ -1,5 +1,5 @@
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from pydantic import BaseModel, Field
+from state.structure_output import ReportOutput
 from state.state import SubGraphSupervisorState
 from services.llm import llm
 
@@ -20,29 +20,20 @@ was found, say so plainly here even if the report text itself is written diploma
 """
 
 
-class ReportOutput(BaseModel):
-    content: str = Field(description="The final report text to show the user.")
-    success: bool = Field(
-        description="True only if genuine information answering the task was found. "
-                    "False if the research material shows repeated failures, blocked "
-                    "sources, or no usable data, regardless of how the report is worded."
-    )
-
-
 def Report_W(state: SubGraphSupervisorState) -> dict:
     print(f"[REPORT] task={state.task!r}")
-    print(f"[REPORT] {len(state.messages)} messages received")
-    if not state.messages:
+    print(f"[REPORT] {len(state.research_messages)} messages received")
+    if not state.research_messages:
         print("[REPORT] no messages at all, nothing to report on")
         return {
-            "messages": [AIMessage(content="No research material was available.")],
+            "research_messages": [AIMessage(content="No research material was available.")],
             "research_succeeded": False,
             "report_written": True,
         }
 
     # Use the accumulated research messages
     research_material = "\n\n".join(
-        _content_to_str(m.content) for m in state.messages
+        _content_to_str(m.content) for m in state.research_messages
     )
     print(f"[REPORT] research_material={research_material[:500]!r}")
 
@@ -57,7 +48,7 @@ def Report_W(state: SubGraphSupervisorState) -> dict:
     print(f"[REPORT] success={result.success} final report: {result.content[:500]!r}")
 
     return {
-        "messages": [AIMessage(content=result.content)],
+        "research_messages": [AIMessage(content=result.content)],
         "research_succeeded": result.success,
         "report_written": True,
     }

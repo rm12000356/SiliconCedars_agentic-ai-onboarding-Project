@@ -44,8 +44,10 @@ def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
             content = result.summary
         else:
             content = f"{result.summary} ({result.issue or 'incomplete'})"
-        if _last_is_ai_message == False:
+
+        if not _last_is_ai_message(state.messages):
             update["messages"] = [AIMessage(content=content)]
+
         update["last_result"] = None
 
     user_id = (config.get("configurable") or {}).get("user_id")

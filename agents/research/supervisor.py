@@ -1,12 +1,6 @@
 from langchain_core.messages import SystemMessage, HumanMessage
-from state.state import SubGraphSupervisorState
+from state.state import SubGraphSupervisorState , SubDecision
 from services.llm import llm
-from pydantic import BaseModel, Field
-from typing import Literal
-
-class SubDecision(BaseModel):
-    next: Literal["researcher", "report", "end"]
-    reason: str = Field(description="Short explanation of the decision")
 
 SUB_SUPERVISOR_PROMPT = """You are the controller of a research subgraph inside a larger multi-agent system.
 
@@ -63,7 +57,7 @@ def Sub_controler(state: SubGraphSupervisorState) -> dict:
             f"{MAX_RESEARCH_ATTEMPTS}, forcing report regardless of LLM decision"
         )
         return {"next": "report"}
-
+ 
     model = llm().with_structured_output(SubDecision)
 
     messages = [
@@ -71,9 +65,9 @@ def Sub_controler(state: SubGraphSupervisorState) -> dict:
         HumanMessage(content=f"Original task: {state.task}"),
     ]
 
-    if state.messages:
+    if state.research_messages:
         # Give the controller a condensed view of what has been found so far
-        last_content = state.messages[-1].content if state.messages else ""
+        last_content = state.research_messages[-1].content if state.research_messages else ""
         messages.append(HumanMessage(content=f"Latest research output:\n{last_content[:3000]}"))
 
     raw = model.invoke(messages)

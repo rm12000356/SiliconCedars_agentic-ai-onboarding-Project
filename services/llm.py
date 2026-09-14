@@ -32,7 +32,7 @@ def llm(model: str | None = None):
         try:
             print(f"[LLM] Trying Groq: {m}")
             client = ChatGroq(model=m)
-            client.invoke("ping")
+            #client.invoke("ping")
             return client
         except Exception as e:
             print(f"[LLM] Groq {m} failed: {e}")
