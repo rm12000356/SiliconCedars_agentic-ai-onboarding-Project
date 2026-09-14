@@ -22,6 +22,16 @@ def _latest_human_message(messages) -> str | None:
             return m.content if isinstance(m.content, str) else str(m.content)
     return None
 
+def _last_is_ai_message(messages) -> bool:
+    if not messages:
+        return False
+
+    last_message = messages[-1]
+
+    return (
+        isinstance(last_message, AIMessage)
+        and not last_message.tool_calls
+    )
 
 def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
     """
@@ -34,7 +44,8 @@ def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
             content = result.summary
         else:
             content = f"{result.summary} ({result.issue or 'incomplete'})"
-        update["messages"] = [AIMessage(content=content)]
+        if _last_is_ai_message == False:
+            update["messages"] = [AIMessage(content=content)]
         update["last_result"] = None
 
     user_id = (config.get("configurable") or {}).get("user_id")

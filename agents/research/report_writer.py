@@ -1,4 +1,4 @@
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from pydantic import BaseModel, Field
 from state.state import SubGraphSupervisorState
 from services.llm import llm
@@ -35,7 +35,7 @@ def Report_W(state: SubGraphSupervisorState) -> dict:
     if not state.messages:
         print("[REPORT] no messages at all, nothing to report on")
         return {
-            "messages": [HumanMessage(content="No research material was available.")],
+            "messages": [AIMessage(content="No research material was available.")],
             "research_succeeded": False,
             "report_written": True,
         }
@@ -57,7 +57,7 @@ def Report_W(state: SubGraphSupervisorState) -> dict:
     print(f"[REPORT] success={result.success} final report: {result.content[:500]!r}")
 
     return {
-        "messages": [HumanMessage(content=result.content)],
+        "messages": [AIMessage(content=result.content)],
         "research_succeeded": result.success,
         "report_written": True,
     }
