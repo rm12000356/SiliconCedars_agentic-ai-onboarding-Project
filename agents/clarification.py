@@ -5,7 +5,7 @@ from langchain_core.runnables import RunnableConfig
 from services.llm import llm
 from state.structure_output import ClarificationOutput
 
-model = llm()
+
 
 def Clarification(state: SupervisorState) -> dict:
     """
@@ -13,6 +13,7 @@ def Clarification(state: SupervisorState) -> dict:
     to the human. On resume, the human's answer is appended to messages
     so the Supervisor can re-decide with full context on its next turn.
     """
+    model = llm()
     question_llm =model.with_structured_output(ClarificationOutput)
     question = state.current_task
     message = [SystemMessage(content=("Generate one concise clarification question that will help resolve the user's ambiguous request."))] + [HumanMessage(content=question)]

@@ -1,6 +1,8 @@
 import os
+
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
+from evaluation.evaluation import run_routing_evaluation, run_rag_evaluation
 
 from graph.workflow import Main_WorkFlow
 from agents.clarification import resume_clarification
@@ -8,9 +10,9 @@ from services.memory import get_checkpointer
 
 
 def run():
-
-    with get_checkpointer() as memory:
-        
+    
+    memory , memory_context = get_checkpointer()
+    try:
         graph = Main_WorkFlow(memory)
 
         # Stable identities
@@ -38,6 +40,16 @@ def run():
             if user_input.lower() in {"quit", "exit"}:
                 break
 
+            if user_input.lower() == "evaluate":
+                print("\nRunning routing evaluation...")
+                run_routing_evaluation("routing-eval-v1", graph)
+    
+                print("\nRunning RAG evaluation...")
+                run_rag_evaluation("rag-eval-v1")
+    
+                print("\nEvaluations complete. Check LangSmith for full results.")
+                continue
+
             result = graph.invoke(
                 {"messages": [HumanMessage(content=user_input)]},
                 config=config,
@@ -56,7 +68,9 @@ def run():
 
             last_message = result["messages"][-1]
             print(f"\nAssistant: {last_message.content}")
-
+    finally:
+        if memory_context is not None:
+            memory_context.__exit__(None, None, None)
 
 if __name__ == "__main__":
     run()

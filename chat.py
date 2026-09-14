@@ -28,8 +28,7 @@ def get_data_layer():
     return SQLAlchemyDataLayer(conninfo=database_url)
 
 
-memory_context = get_checkpointer()
-memory = memory_context.__enter__()
+memory, memory_context= get_checkpointer()
 
 graph = Main_WorkFlow(memory)
 
@@ -44,8 +43,9 @@ def close_memory(
     value: BaseException | None,
     traceback: Any | None,
 ) -> bool | None:
-    return memory_context.__exit__(typ, value, traceback)
-
+    if memory_context is not None:
+        return memory_context.__exit__(typ, value, traceback)
+    return None
 
 atexit.register(close_memory, None, None, None)
 
@@ -61,7 +61,7 @@ async def main(message: cl.Message):
 
     thread_id = cl.context.session.thread_id
     user_id = "test-user-1"
-    permission_level = "elevated"
+    permission_level = os.getenv("DEFAULT_PERMISSION_LEVEL", "general")
 
     config: RunnableConfig = {
         "configurable": {

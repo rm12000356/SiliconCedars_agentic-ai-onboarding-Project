@@ -17,6 +17,7 @@ def get_general_connection():
         dbname=os.getenv("DB_NAME", "company_intel"),
         user=os.getenv("DB_GENERAL_USER", "general_role"),
         password=os.getenv("DB_GENERAL_PASSWORD"),
+        options="-c statement_timeout=5000",
     )
 
 

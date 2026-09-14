@@ -40,14 +40,23 @@ def get_user_credential(user_id: int) -> dict:
 def run_general_query(query_text: str) -> list[dict]:
     """
     Executes agent-generated SQL through the restricted general_role
-    connection. Security here comes entirely from the role's grants,
-    not from parsing or validating the SQL text itself.
+    connection. 
     """
     if not query_text:
         raise RuntimeError(
             "run_general_query called with an empty query_text. A valid "
             "SQL statement is required."
         )
+    
+    stripped = query_text.strip()
+    if stripped.endswith(";"):
+        stripped = stripped[:-1]
+    if ";" in stripped:
+        raise ValueError(
+            "Multiple SQL statements are not allowed in a single query. "
+            "Run one statement at a time."
+        )
+
     with get_general_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(sql.SQL(query_text))

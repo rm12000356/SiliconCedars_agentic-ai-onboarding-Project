@@ -1,23 +1,23 @@
+import logging
+import os
+
 from langchain_core.messages import SystemMessage, HumanMessage
+
 from state.state import SupervisorState, SpecialistResult
 from services.llm import llm
 from rag.retrieval import retrieve_relevant_chunks
 
-# Cosine distance threshold below which a chunk is considered a real
-# match. Starting point, not tuned yet, lower = more similar, 0 = identical.
-# Worth adjusting once you see real retrieval results, this number is a
-# guess until tested against actual queries.
-NO_MATCH_DISTANCE_THRESHOLD = 0.8
+logger = logging.getLogger("rag")
+
+NO_MATCH_DISTANCE_THRESHOLD = float(os.getenv("RAG_NO_MATCH_DISTANCE_THRESHOLD", "0.8"))
 
 
 def RAG(state: SupervisorState) -> dict:
     """
-    Retrieves relevant internal documents and generates a grounded
-    answer using only that retrieved content. If nothing relevant is
-    found, reports status="partial" rather than guessing or falling
-    back to outside knowledge, this is what lets the Supervisor's
-    organizational-fallback rule (no fallthrough to research for
-    internal topics) actually function.
+    Retrieves relevant internal documents and generates a grounded answer
+    using only that retrieved content. If nothing relevant is found, reports
+    status="partial" rather than guessing or falling back to outside
+    knowledge 
     """
     if state.current_task is None:
         raise RuntimeError(
@@ -25,9 +25,35 @@ def RAG(state: SupervisorState) -> dict:
             "should always set current_task before routing here."
         )
 
-    chunks = retrieve_relevant_chunks(state.current_task, top_k=3)
+    try:
+        chunks = retrieve_relevant_chunks(state.current_task, top_k=3)
+    except Exception as e:
+        logger.warning(
+            "retrieval_failed",
+            extra={"error_type": type(e).__name__, "error": str(e)},
+        )
+        result = SpecialistResult(
+            source="rag",
+            summary="The internal document search is temporarily unavailable.",
+            status="failed",
+            issue="rag_unavailable",
+        )
+        return {"last_result": result}
 
-    print(f"[RAG] raw distances: {[(c['distance'], c['content'][:50]) for c in chunks]}")
+    if chunks:
+        distances = [c["distance"] for c in chunks]
+        logger.debug(
+            "retrieval_distances",
+            extra={
+                "min": min(distances),
+                "max": max(distances),
+                "n_below_threshold": sum(d < NO_MATCH_DISTANCE_THRESHOLD for d in distances),
+                "n_total": len(distances),
+                "threshold": NO_MATCH_DISTANCE_THRESHOLD,
+            },
+        )
+    else:
+        logger.debug("retrieval_returned_no_chunks")
 
     relevant_chunks = [c for c in chunks if c["distance"] < NO_MATCH_DISTANCE_THRESHOLD]
 
@@ -41,7 +67,6 @@ def RAG(state: SupervisorState) -> dict:
         return {"last_result": result}
 
     context_text = "\n\n".join(f"- {c['content']}" for c in relevant_chunks)
-
     system_message = SystemMessage(
         content=(
             "You are a RAG specialist answering questions using only the internal "
