@@ -5,10 +5,19 @@ import os
 from datetime import datetime, timezone
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from db.connection import get_elevated_connection
 from dotenv import load_dotenv
 
+from state.state import SpecialistResult, TaskRecord
+
 load_dotenv()
+
+_CHECKPOINT_ALLOWED_TYPES = [TaskRecord, SpecialistResult]
+
+_CHECKPOINT_SERDE = JsonPlusSerializer(
+    allowed_msgpack_modules=_CHECKPOINT_ALLOWED_TYPES,
+)
 
 
 def get_checkpointer():
@@ -19,13 +28,13 @@ def get_checkpointer():
         if not conn_string:
             raise ValueError("DATABASE_URL must be set when CHECKPOINT_BACKEND is postgres")
 
-        # from_conn_string is a context manager – enter it so the connection is live
         saver = PostgresSaver.from_conn_string(conn_string)
         checkpointer = saver.__enter__()
         checkpointer.setup()          # creates the checkpoint tables if needed
+        checkpointer.serde = _CHECKPOINT_SERDE
         return checkpointer , saver
 
-    return MemorySaver(), None
+    return MemorySaver(serde=_CHECKPOINT_SERDE), None
 
 
 

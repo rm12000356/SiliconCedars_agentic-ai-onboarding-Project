@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 
 from state.state import SupervisorState, SpecialistResult, ChartSpec
 from services.llm import llm
+from langchain_core.messages import HumanMessage
 
 OUTPUT_DIR = Path("outputs")
 
@@ -63,7 +64,7 @@ def Visualization(state: SupervisorState) -> dict:
 
             spec = spec.model_copy(
                 update={
-                    "title": _title_from_task(state.current_task),
+                    "title": _title_from_user_request(state),
                     "chart_type": _chart_type_from_task(
                         state.current_task
                     ),
@@ -293,6 +294,29 @@ def _title_from_task(task: str) -> str:
 
     return cleaned[:77].rstrip() + "..."
 
+def _title_from_user_request(state: SupervisorState) -> str:
+    """
+    Prefer the original user request over the supervisor's internal task
+    description. Falls back to the task string if no HumanMessage is found.
+    """
+    for m in reversed(state.messages):
+        if isinstance(m, HumanMessage):
+            text = m.content if isinstance(m.content, str) else str(m.content)
+            text = " ".join(text.split())
+
+            lower = text.lower()
+            for prefix in (
+                "show me a ", "show me ", "create a ", "make a ",
+                "draw a ", "plot ", "visualize ", "visualise ",
+            ):
+                if lower.startswith(prefix):
+                    text = text[len(prefix):]
+                    break
+
+            return text[:80] if len(text) <= 80 else text[:77].rstrip() + "..."
+
+    # fallback
+    return _title_from_task(state.current_task or "Chart")
 
 def _chart_type_from_task(task: str) -> Literal["bar", "line", "pie"]:
     """

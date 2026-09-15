@@ -404,7 +404,7 @@ def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> Supe
         classes: list[str | None] = []
         errors: list[str] = []
 
-        for method in ("json_mode","function_calling"):
+        for method in ("function_calling","json_mode"):
             try:
                 structured = model.with_structured_output(SupervisorDecision, method=method)
                 raw = structured.invoke(prompt)

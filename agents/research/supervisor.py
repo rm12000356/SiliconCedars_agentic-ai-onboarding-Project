@@ -1,4 +1,4 @@
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from state.state import SubGraphSupervisorState , SubDecision
 from services.llm import llm
 
@@ -15,18 +15,21 @@ Your only job is to decide the next step of the research process. You must choos
 1. **No research done yet**
    - If there are no research findings in the messages yet → choose "researcher".
 
-2. **Research is still incomplete**
-   - If the researcher tried to gather information but the results are insufficient, incomplete, failed (e.g. 404, empty results, errors), or clearly need more work → choose "researcher".
+2. **Prefer finishing over perfection**
+   - If the latest research output already contains concrete facts, dates, tables, multiple sources, or a structured note, choose "report" even if the note feels slightly incomplete. Do not keep researching for perfection.
 
-3. **Enough information exists but no final report yet**
+3. **Research is still incomplete**
+   - Only choose "researcher" again when the results are truly insufficient, empty, failed (404, empty body, errors), or clearly missing the core of the original task.
+
+4. **Enough information exists but no final report yet**
    - If the researcher has successfully gathered useful and relevant information, and a final summary/report has NOT been written yet → choose "report".
 
-4. **Final report already exists**
-   - If a clear final summary or report has already been produced (usually the last message is a polished answer with sources) → choose "end".
-   - This is the most important rule to prevent infinite loops. Once a proper report exists, you must choose "end".
+5. **Final report already exists**
+   - If a clear final summary or report has already been produced → choose "end".
+   - This is the most important rule to prevent infinite loops.
 
-5. **Research completely failed**
-   - If after multiple attempts the researcher found nothing useful, or clearly stated that no relevant information could be found → choose "end".
+6. **Research completely failed**
+   - If after multiple attempts the researcher found nothing useful → choose "end".
 
 ### Additional Guidelines
 
@@ -44,6 +47,44 @@ You must respond with a structured decision containing:
 
 MAX_RESEARCH_ATTEMPTS = 3
 
+def _has_substantial_note(messages) -> bool:
+    """Cheap heuristic: any message longer than ~800 chars is treated as real material."""
+    for m in messages:
+        content = getattr(m, "content", "") or ""
+        if isinstance(content, list):          # multimodal safety
+            content = " ".join(
+                p.get("text", "") if isinstance(p, dict) else str(p)
+                for p in content
+            )
+        if len(str(content)) > 800:
+            return True
+    return False
+
+def _clean_latest_content(messages, max_chars: int = 2000) -> str:
+    """
+    Give the controller a cleaner view:
+    - prefer the last AIMessage (the researcher's synthesis)
+    - fall back to the last message
+    - strip tool-call noise and truncate
+    """
+    if not messages:
+        return ""
+
+    # Prefer the last AI message (usually the research note)
+    for m in reversed(messages):
+        if isinstance(m, AIMessage) and m.content:
+            text = m.content if isinstance(m.content, str) else str(m.content)
+            break
+    else:
+        text = messages[-1].content if messages else ""
+        text = text if isinstance(text, str) else str(text)
+
+    # Light cleanup of obvious tool-call boilerplate
+    for noise in ("tool call:", "tool result:", "args=", "FunctionMessage"):
+        text = text.replace(noise, "")
+
+    return text[:max_chars]
+
 
 def Sub_controler(state: SubGraphSupervisorState) -> dict:
 
@@ -54,10 +95,14 @@ def Sub_controler(state: SubGraphSupervisorState) -> dict:
     if state.research_attempts >= MAX_RESEARCH_ATTEMPTS:
         print(
             f"[SUB-SUPERVISOR] research_attempts={state.research_attempts} >= "
-            f"{MAX_RESEARCH_ATTEMPTS}, forcing report regardless of LLM decision"
+            f"{MAX_RESEARCH_ATTEMPTS}, forcing report"
         )
         return {"next": "report"}
- 
+
+    if state.research_attempts >= 1 and _has_substantial_note(state.research_messages):
+        print("[SUB-SUPERVISOR] substantial research note already present → forcing report")
+        return {"next": "report"}
+
     model = llm().with_structured_output(SubDecision)
 
     messages = [
@@ -65,10 +110,9 @@ def Sub_controler(state: SubGraphSupervisorState) -> dict:
         HumanMessage(content=f"Original task: {state.task}"),
     ]
 
-    if state.research_messages:
-        # Give the controller a condensed view of what has been found so far
-        last_content = state.research_messages[-1].content if state.research_messages else ""
-        messages.append(HumanMessage(content=f"Latest research output:\n{last_content[:3000]}"))
+    latest = _clean_latest_content(state.research_messages)
+    if latest:
+        messages.append(HumanMessage(content=f"Latest research output:\n{latest}"))
 
     raw = model.invoke(messages)
     if isinstance(raw, SubDecision):
