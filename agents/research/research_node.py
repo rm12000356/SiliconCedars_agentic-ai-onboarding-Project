@@ -30,13 +30,13 @@ def make_research_node(subgraph):
         if succeeded:
             result = SpecialistResult(
                 source="research",
-                summary=sub_output["messages"][-1].content,
+                summary=sub_output["research_messages"][-1].content,
                 status="done",
             )
         else:
             result = SpecialistResult(
                 source="research",
-                summary=sub_output["messages"][-1].content,
+                summary=sub_output["research_messages"][-1].content,
                 status="failed",
                 issue="research_no_results",
             )

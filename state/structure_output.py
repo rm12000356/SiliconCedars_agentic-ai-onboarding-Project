@@ -22,3 +22,11 @@ class ClarificationOutput(BaseModel):
     question: str = Field(
         description="The single clarification question to ask the user."
     )
+
+class ReportOutput(BaseModel):
+    content: str = Field(description="The final report text to show the user.")
+    success: bool = Field(
+        description="True only if genuine information answering the task was found. "
+                    "False if the research material shows repeated failures, blocked "
+                    "sources, or no usable data, regardless of how the report is worded."
+    )

@@ -1,8 +1,12 @@
+from __future__ import annotations
+
+import os
+from typing import Any, Callable
+
+from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
-from dotenv import load_dotenv
 from pydantic import SecretStr
-import os
 
 load_dotenv()
 
@@ -10,45 +14,101 @@ PRIMARY_MODEL = "openai/gpt-oss-120b"
 
 FALLBACK_MODELS = [
     "openai/gpt-oss-20b",
-    "qwen/qwen3-32b",                 
+    "qwen/qwen3-32b",
     "openai/gpt-oss-safeguard-20b",
 ]
 
 OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504, 529}
 
-def llm(model: str | None = None):
 
-    # 1. Caller forced a specific model
-    if model is not None:
-        if model.startswith("openrouter/") or model.startswith("openai/") and "openrouter" in model:
-            # allow forcing OpenRouter
-            return _make_openrouter(model.replace("openrouter/", ""))
-        return ChatGroq(model=model)
+RETRYABLE_TEXT_MARKERS = (
+    "rate limit",
+    "rate_limit",
+    "too many requests",
+    "quota",
+    "overloaded",
+    "timeout",
+    "timed out",
+    "connection",
+    "service unavailable",
+    "decommissioned",
+    "model_not_found",
+)
 
-    # 2 + 3. Try Groq models
-    candidates = [PRIMARY_MODEL] + FALLBACK_MODELS
-    for m in candidates:
-        try:
-            print(f"[LLM] Trying Groq: {m}")
-            client = ChatGroq(model=m)
-            client.invoke("ping")
-            return client
-        except Exception as e:
-            print(f"[LLM] Groq {m} failed: {e}")
-            continue
 
-    # 4. OpenRouter last resort
-    try:
-        print(f"[LLM] All Groq models failed → OpenRouter ({OPENROUTER_MODEL})")
-        return _make_openrouter(OPENROUTER_MODEL)
-    except Exception as e:
-        print(f"[LLM] OpenRouter also failed: {e}")
+def _is_retryable(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int) and status_code in RETRYABLE_STATUS_CODES:
+        return True
 
-    raise RuntimeError(
-        "All configured LLM models failed. "
-        "Check GROQ_API_KEY, OPENROUTER_API_KEY and model names."
-    )
+    # Some client libraries nest the real HTTP status on a `.response`.
+    response = getattr(exc, "response", None)
+    nested_status = getattr(response, "status_code", None)
+    if isinstance(nested_status, int) and nested_status in RETRYABLE_STATUS_CODES:
+        return True
+
+    text = str(exc).lower()
+    return any(marker in text for marker in RETRYABLE_TEXT_MARKERS)
+
+
+class ResilientLLM:
+
+    def __init__(
+        self,
+        candidates: list[tuple[str, Callable[[], Any]]],
+        transforms: list[Callable[[Any], Any]] | None = None,
+    ):
+        self._candidates = candidates
+        self._transforms = transforms or []
+
+    def _with_transform(self, fn: Callable[[Any], Any]) -> "ResilientLLM":
+        return ResilientLLM(self._candidates, self._transforms + [fn])
+
+    def bind_tools(self, tools, **kwargs) -> "ResilientLLM":
+        return self._with_transform(lambda client: client.bind_tools(tools, **kwargs))
+
+    def with_structured_output(self, schema, **kwargs) -> "ResilientLLM":
+        return self._with_transform(lambda client: client.with_structured_output(schema, **kwargs))
+
+    def _build(self, factory: Callable[[], Any]) -> Any:
+        client = factory()
+        for transform in self._transforms:
+            client = transform(client)
+        return client
+
+    def invoke(self, *args, **kwargs):
+        last_exc: Exception | None = None
+
+        for label, factory in self._candidates:
+            try:
+                client = self._build(factory)
+            except Exception as e:
+                print(f"[LLM] {label} unavailable while constructing client: {type(e).__name__}: {e}")
+                last_exc = e
+                continue
+
+            try:
+                print(f"[LLM] Trying {label}")
+                return client.invoke(*args, **kwargs)
+            except Exception as e:
+                last_exc = e
+                if _is_retryable(e):
+                    print(f"[LLM] {label} failed ({type(e).__name__}: {e}) → trying next model")
+                    continue
+                print(f"[LLM] {label} failed with non-retryable error: {type(e).__name__}: {e}")
+                raise
+
+        raise RuntimeError(
+            "All configured LLM models failed. "
+            f"Last error: {type(last_exc).__name__ if last_exc else '?'}: {last_exc}. "
+            "Check GROQ_API_KEY, OPENROUTER_API_KEY and model names."
+        )
+
+
+def _make_groq(model_name: str) -> ChatGroq:
+    return ChatGroq(model=model_name)
 
 
 def _make_openrouter(model_name: str) -> ChatOpenAI:
@@ -65,3 +125,21 @@ def _make_openrouter(model_name: str) -> ChatOpenAI:
             "X-Title": "SiliconCedars",
         },
     )
+
+
+def llm(model: str | None = None) -> ResilientLLM:
+
+    if model is not None:
+        if model.startswith("openrouter/") or (model.startswith("openai/") and "openrouter" in model):
+            name = model.replace("openrouter/", "")
+            return ResilientLLM([(f"openrouter:{name}", lambda n=name: _make_openrouter(n))])
+        return ResilientLLM([(f"groq:{model}", lambda m=model: _make_groq(m))])
+    
+    candidates: list[tuple[str, Callable[[], Any]]] = [
+        (f"groq:{m}", (lambda m=m: _make_groq(m))) for m in [PRIMARY_MODEL] + FALLBACK_MODELS
+    ]
+    candidates.append(
+        (f"openrouter:{OPENROUTER_MODEL}", lambda: _make_openrouter(OPENROUTER_MODEL))
+    )
+
+    return ResilientLLM(candidates)

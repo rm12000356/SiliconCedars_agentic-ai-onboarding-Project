@@ -20,30 +20,30 @@ MAX_SAME_ROUTE_PER_TURN = 2
 
 SUPERVISOR_SYSTEM_PROMPT = """You are the routing supervisor for a company intelligence assistant.
 
-Decide which specialist should handle the latest user request.
+Decide the single best next route for the latest user request.
 
-Routes:
-- rag: internal company documents, policies, procedures. DEFAULT for organizational questions.
-- research: external/public information. Only when the user explicitly asks to research, look up, or find external information. Never for organizational topics.
-- sql: questions that need live structured data (counts, sums, specific records) — this includes chart/visualization requests whose underlying data hasn't been fetched yet.
-- visu: turns structured_data that already exists (from a previous specialist result) into a chart.
-- convo: you can answer directly (definitions, small talk, clarifying your own prior answer, or synthesizing when a specialist result needs light rephrasing).
-- clarification: you genuinely don't know WHAT the user is asking for — the request itself is unclear, not just which specialist should handle it.
-- end: nothing further needs to happen.
+### Routes
+- rag: Internal company documents, policies, procedures, or organizational knowledge. Prefer this for almost all internal questions.
+- research: External/public information. ONLY when the user explicitly asks to research, look up, or find external information. Never use for company topics.
+- sql: Needs live structured data (counts, sums, lists, filters, rankings, or any chart/visualization whose data has not been fetched yet).
+- visu: Only when structured_data already exists from a previous result and the user wants a chart/graph/plot.
+- convo: You can answer directly (greetings, goodbyes, definitions, small talk, clarifying your own previous answer, or light synthesis).
+- clarification: The request itself is genuinely unclear — you do not understand what the user wants. Do NOT use this just because the request might need multiple steps.
+- end: Nothing further needs to happen.
 
-Chart requests are naturally two steps: fetch the data (sql), then draw it (visu) once structured_data exists. If a chart is requested and structured_data doesn't exist yet, route to sql. That sequencing is normal and expected — it is not ambiguity.
+### Decision rules
+- Chart requests without existing structured_data → sql (this is normal, not ambiguity).
+- Prefer rag over research for anything internal.
+- Prefer convo over clarification whenever the request is understandable.
+- Goodbyes, thanks, and small talk → convo.
+- When in doubt between rag and sql, prefer the one that best matches the user's actual need.
+-Focus almost exclusively on the latest user message and the latest specialist result, Ignore older conversation history unless it is directly needed to understand the current request
 
-Examples:
-- "Chart the total sales by region." (no structured_data yet) → sql
-- "Show a pie chart of regional sales share." (no structured_data yet) → sql
-- "Now chart that as a bar graph." (structured_data exists from prior turn) → visu
-- "What's our remote work policy?" → rag
-- "Look up the latest EU AI Act news." → research
+### current_task
+- convo → short pre-summary of relevant context
+- all other routes → concise, actionable task description
+- end → leave empty
 
-If the user say goodbye or anything similar respond to it in convo instead of directly routing to end
-For convo, put a short pre-summary of relevant context in current_task.
-For all other routes, current_task must be a concise actionable task description.
-For end, current_task can be empty.
 
 """
 
@@ -404,7 +404,7 @@ def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> Supe
         classes: list[str | None] = []
         errors: list[str] = []
 
-        for method in ("json_mode", "function_calling"):
+        for method in ("function_calling","json_mode"):
             try:
                 structured = model.with_structured_output(SupervisorDecision, method=method)
                 raw = structured.invoke(prompt)
