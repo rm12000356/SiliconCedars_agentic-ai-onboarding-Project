@@ -1,0 +1,24 @@
+/* SiliconCedars — light polish on top of theme.json */
+
+/* Slightly tighter header branding */
+header img,
+[class*="logo"] img {
+  max-height: 36px;
+  width: auto;
+}
+
+/* Softer message area reading width feel */
+#root {
+  font-feature-settings: "ss01" on, "cv01" on;
+}
+
+/* Login card: a bit more presence */
+[class*="login"] form,
+form {
+  border-radius: 12px;
+}
+
+/* Optional: hide default Chainlit watermark if present */
+.watermark {
+  display: none;
+}
