@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 from state.state import SupervisorState, SpecialistResult, ChartSpec
 from services.llm import llm
 from langchain_core.messages import HumanMessage
+from services.message_utils import latest_user_request
 
 OUTPUT_DIR = Path("outputs")
 
@@ -62,11 +63,13 @@ def Visualization(state: SupervisorState) -> dict:
                 state.last_result.structured_data
             )
 
+            user_request = latest_user_request(state.messages)
+
             spec = spec.model_copy(
                 update={
                     "title": _title_from_user_request(state),
                     "chart_type": _chart_type_from_task(
-                        state.current_task
+                        user_request or state.current_task
                     ),
                 }
             )
@@ -297,26 +300,27 @@ def _title_from_task(task: str) -> str:
 def _title_from_user_request(state: SupervisorState) -> str:
     """
     Prefer the original user request over the supervisor's internal task
-    description. Falls back to the task string if no HumanMessage is found.
+    description. Clarification answers are skipped: after a round-trip the
+    last HumanMessage is the answer ("2024"), which became the chart title.
+    Falls back to the task string if no user request is found.
     """
-    for m in reversed(state.messages):
-        if isinstance(m, HumanMessage):
-            text = m.content if isinstance(m.content, str) else str(m.content)
-            text = " ".join(text.split())
+    text = latest_user_request(state.messages)
 
-            lower = text.lower()
-            for prefix in (
-                "show me a ", "show me ", "create a ", "make a ",
-                "draw a ", "plot ", "visualize ", "visualise ",
-            ):
-                if lower.startswith(prefix):
-                    text = text[len(prefix):]
-                    break
+    if text:
+        lower = text.lower()
+        for prefix in (
+            "show me a ", "show me ", "create a ", "make a ",
+            "draw a ", "plot ", "visualize ", "visualise ",
+        ):
+            if lower.startswith(prefix):
+                text = text[len(prefix):]
+                break
 
-            return text[:80] if len(text) <= 80 else text[:77].rstrip() + "..."
+        return text[:80] if len(text) <= 80 else text[:77].rstrip() + "..."
 
     # fallback
     return _title_from_task(state.current_task or "Chart")
+
 
 def _chart_type_from_task(task: str) -> Literal["bar", "line", "pie"]:
     """

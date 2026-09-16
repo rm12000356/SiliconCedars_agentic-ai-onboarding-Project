@@ -8,7 +8,8 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import ValidationError
 
 from state.state import SupervisorState, TaskRecord, SpecialistResult
-from state.structure_output import SupervisorDecision
+from state.structure_output import SupervisorDecision, ClarificationOutput
+from services.message_utils import latest_user_request
 from services.llm import llm
 from services.memory import format_facts_for_prompt
 from services.errors import classify_llm_error
@@ -17,6 +18,7 @@ logger = logging.getLogger("supervisor")
 
 MAX_HOPS_PER_TURN = 6
 MAX_SAME_ROUTE_PER_TURN = 2
+MAX_CLARIFICATIONS_PER_TURN = 1
 
 SUPERVISOR_SYSTEM_PROMPT = """You are the routing supervisor for a company intelligence assistant.
 
@@ -51,6 +53,11 @@ _OUTAGE_TASK = (
     "Explain that the assistant is temporarily unavailable due to a service "
     "issue, not because the request was unclear. Ask them to try again later. "
     "Do not invent an answer."
+)
+
+CLARIFICATION_QUESTION_PROMPT = (
+    "Generate one concise clarification question that will help resolve the "
+    "user's ambiguous request. Ask exactly one question."
 )
 
 def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
@@ -108,7 +115,34 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
     # ----- 5. Map to state update -----
     update = map_to_state(decision)
     update["task_history"] = task_history
+
+    if decision.next == "clarification":
+        update["clarification_question"] = _generate_clarification_question(decision)
+
     return update
+
+
+def _generate_clarification_question(decision: SupervisorDecision) -> str:
+    """Best-effort. A failure here must not break the turn."""
+    try:
+        model = llm().with_structured_output(ClarificationOutput)
+        result = model.invoke([
+            SystemMessage(content=CLARIFICATION_QUESTION_PROMPT),
+            HumanMessage(
+                content=decision.current_task or "The user's request was unclear."
+            ),
+        ])
+        if not isinstance(result, ClarificationOutput):
+            result = ClarificationOutput.model_validate(result)
+        question = (result.question or "").strip()
+        if question:
+            return question
+    except Exception as e:
+        logger.warning(
+            "clarification_question_generation_failed",
+            extra={"error": f"{type(e).__name__}: {e}"},
+        )
+    return "Could you clarify what you'd like me to do?"
 
 
 def deterministic_decision(
@@ -208,26 +242,11 @@ def _user_wants_visualization(state: SupervisorState) -> bool:
     if not state.messages:
         return False
 
-    last_human_content = None
-    for m in reversed(state.messages):
-        if isinstance(m, HumanMessage):
-            last_human_content = m.content
-            break
-
-    if last_human_content is None:
+    request = latest_user_request(state.messages)
+    if not request:
         return False
 
-    # content can be str or list (multimodal). Normalize to a single lowercase string.
-    if isinstance(last_human_content, list):
-        text_parts = []
-        for part in last_human_content:
-            if isinstance(part, str):
-                text_parts.append(part)
-            elif isinstance(part, dict) and part.get("type") == "text":
-                text_parts.append(str(part.get("text", "")))
-        text = " ".join(text_parts).lower()
-    else:
-        text = str(last_human_content).lower()
+    text = request.lower()
 
     keywords = ["chart", "graph", "plot", "visualize", "visualise", "bar", "pie", "line chart"]
     return any(k in text for k in keywords)
@@ -265,13 +284,23 @@ def post_decision_guards(
 
     # Only one clarification attempt per turn
     if decision.next == "clarification":
-        clar_count = sum(1 for r in turn_history if r.route == "clarification")
-        # Note: clarification itself is not recorded in task_history in the
-        # current codebase; if you later record it, this becomes active.
-        # For now we keep the check as a future-proof guard.
-        if clar_count >= 1:
-            logger.warning("clarification_already_used")
-            return SupervisorDecision(next="end", current_task="")
+        if state.clarification_count >= MAX_CLARIFICATIONS_PER_TURN:
+            logger.warning(
+                "clarification_cap_hit",
+                extra={"count": state.clarification_count,
+                       "cap": MAX_CLARIFICATIONS_PER_TURN},
+            )
+            # Route to convo rather than end so the user gets an actual reply
+            # instead of silence.
+            return SupervisorDecision(
+                next="convo",
+                current_task=(
+                    "The request is still unclear after asking for clarification. "
+                    "Tell the user plainly that you could not determine what they "
+                    "need, and ask them to rephrase with more specifics. "
+                    "Do not invent an answer."
+                ),
+            )
 
     return decision
 
@@ -355,12 +384,21 @@ def gather_context(
         "last_result": state.last_result,
         "task_history": task_history,
         "known_facts": known_facts,
+        "conversation_summary": state.conversation_summary,
     }
 
 
 def build_prompt(context: dict, previous_error: str | None = None) -> list:
     messages = [SystemMessage(content=SUPERVISOR_SYSTEM_PROMPT)]
 
+    if context.get("conversation_summary"):
+        messages.append(
+            SystemMessage(
+                content=f"[Summary of earlier conversation]: "
+                        f"{context['conversation_summary']}"
+            )
+        )
+    
     if context.get("known_facts"):
         messages.append(SystemMessage(content=context["known_facts"]))
 

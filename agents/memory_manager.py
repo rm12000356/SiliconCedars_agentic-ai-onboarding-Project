@@ -12,6 +12,7 @@ def memory_manager(state: SupervisorState) -> dict:
 
     new_turn = state.turn_count + 1
     update["turn_count"] = new_turn
+    update["clarification_count"] = 0
     print(f"[MEMORY] starting turn {new_turn}")
 
     # --- Prune/summarize old messages ---
@@ -19,6 +20,12 @@ def memory_manager(state: SupervisorState) -> dict:
         to_summarize = state.messages[:-KEEP_RECENT_MESSAGES]
         transcript = "\n".join(f"{m.type}: {m.content}" for m in to_summarize)
 
+        if state.conversation_summary:
+            transcript = (
+                f"Summary of even earlier conversation: "
+                f"{state.conversation_summary}\n\n{transcript}"
+            )
+        
         print(f"[MEMORY] summarizing {len(to_summarize)} old messages")
 
         summary_response = llm().invoke([
@@ -31,11 +38,9 @@ def memory_manager(state: SupervisorState) -> dict:
         ])
 
         removals = [RemoveMessage(id=m.id) for m in to_summarize if m.id]
-        summary_message = SystemMessage(
-            content=f"[Summary of earlier conversation]: {summary_response.content}"
-        )
 
-        update["messages"] = removals + [summary_message]
+        update["messages"] = removals
+        update["conversation_summary"] = str(summary_response.content)
         print(f"[MEMORY] summary: {str(summary_response.content)[:200]!r}")
 
     # --- Prune old task_history entries ---

@@ -26,20 +26,38 @@ def make_research_node(subgraph):
         sub_output = subgraph.invoke(sub_input)
 
         succeeded = sub_output.get("research_succeeded")
+        research_messages = sub_output.get("research_messages") or []
 
-        if succeeded:
-            result = SpecialistResult(
-                source="research",
-                summary=sub_output["research_messages"][-1].content,
-                status="done",
-            )
-        else:
-            result = SpecialistResult(
-                source="research",
-                summary=sub_output["research_messages"][-1].content,
-                status="failed",
-                issue="research_no_results",
-            )
+        if not research_messages:
+            return {
+                "last_result": SpecialistResult(
+                    source="research",
+                    summary=(
+                        "The research step finished without producing any "
+                        "material to report."
+                    ),
+                    status="failed",
+                    issue="research_no_results",
+                )
+            }
+
+        summary = str(research_messages[-1].content).strip()
+        if not summary:
+            return {
+                "last_result": SpecialistResult(
+                    source="research",
+                    summary="The research step produced an empty report.",
+                    status="failed",
+                    issue="research_empty_report",
+                )
+            }
+
+        result = SpecialistResult(
+            source="research",
+            summary=summary,
+            status="done" if succeeded else "failed",
+            issue=None if succeeded else "research_no_results",
+        )
 
         return {"last_result": result}
 

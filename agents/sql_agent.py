@@ -111,13 +111,21 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
         messages.append(response)
 
         if not response.tool_calls:
-            # Model produced a final answer
             print(f"[SQL] final answer: {response.content!r}")
+            final_text = str(response.content)
+            if not final_text.strip():
+                return {
+                    "last_result": SpecialistResult(
+                        source="sql",
+                        summary="Could not produce an answer from the data retrieved.",
+                        status="failed",
+                        issue="empty_answer",
+                        structured_data=last_chartable_rows,
+                    )
+                }
             return {
                 "last_result": SpecialistResult(
-                    source="sql",
-                    summary=str(response.content),
-                    status="done",
+                    source="sql", summary=final_text, status="done",
                     structured_data=last_chartable_rows,
                 )
             }
@@ -187,8 +195,16 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
         try:
             final = llm().invoke(synthesis_prompt)
             summary = str(final.content)
-            status = "done"
-            issue = None
+            if not summary.strip():
+                # An empty synthesis is not a success. Reporting it as "done"
+                # sent an empty string through Finalize and rendered a blank
+                # chat bubble.
+                summary = "Could not produce an answer from the data retrieved."
+                status = "failed"
+                issue = "empty_synthesis"
+            else:
+                status = "done"
+                issue = None
         except Exception as e:
             summary = "Could not complete the SQL request within the allowed steps."
             status = "failed"

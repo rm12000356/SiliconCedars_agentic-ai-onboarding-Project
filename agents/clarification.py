@@ -1,11 +1,11 @@
 from langgraph.types import interrupt, Command
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from state.state import SupervisorState
 from langchain_core.runnables import RunnableConfig
-from services.llm import llm
-from state.structure_output import ClarificationOutput
 
+from services.message_utils import CLARIFICATION_ANSWER_FLAG
 
+DEFAULT_QUESTION = "Could you clarify what you'd like me to do?"
 
 def Clarification(state: SupervisorState) -> dict:
     """
@@ -13,19 +13,25 @@ def Clarification(state: SupervisorState) -> dict:
     to the human. On resume, the human's answer is appended to messages
     so the Supervisor can re-decide with full context on its next turn.
     """
-    model = llm()
-    question_llm =model.with_structured_output(ClarificationOutput)
-    question = state.current_task
-    message = [SystemMessage(content=("Generate one concise clarification question that will help resolve the user's ambiguous request."))] + [HumanMessage(content=question)]
+    question = (state.clarification_question or "").strip() or DEFAULT_QUESTION
 
-    result = question_llm.invoke(message)
+    answer = interrupt({"question": question})
 
-    answer = interrupt({"question": result.question})
+    if not isinstance(answer, str):
+        answer = str(answer)
 
     return {
-        "messages": [SystemMessage(content=state.current_task)] +[HumanMessage(content=answer)],
-        "current_task": None,   # consumed, Supervisor will set a fresh one
-        "last_result": None,    # nothing to carry forward from a pause
+        "messages": [
+            AIMessage(content=question),
+            HumanMessage(
+                content=answer,
+                additional_kwargs={CLARIFICATION_ANSWER_FLAG: True},
+            ),
+        ],
+        "current_task": None,            
+        "clarification_question": None,  
+        "clarification_count": state.clarification_count + 1,
+        "last_result": None,             
     }
 
 def resume_clarification(graph, thread_id: str, answer: str, config: RunnableConfig):

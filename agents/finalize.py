@@ -48,7 +48,11 @@ def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
         if not _last_is_ai_message(state.messages):
             update["messages"] = [AIMessage(content=content)]
 
+        if content and content.strip() and not _already_delivered(state.messages, content):
+            update["messages"] = [AIMessage(content=content)]
+            
         update["last_result"] = None
+        update["clarification_count"]= 0
 
     user_id = (config.get("configurable") or {}).get("user_id")
     latest_human = _latest_human_message(state.messages)
@@ -77,3 +81,16 @@ def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
             print(f"[MEMORY] fact extraction failed, skipping: {e}")
 
     return update
+
+def _already_delivered(messages, content: str) -> bool:
+    """
+    True only if the last message is ALREADY this exact answer.
+
+    Deliberately compares content rather than just position: the old
+    positional check suppressed the answer whenever the thread happened to end
+    on any AIMessage, which would silently drop a specialist's result if a node
+    that emits its own message (Convo) ever stopped being terminal.
+    """
+    if not _last_is_ai_message(messages):
+        return False
+    return str(messages[-1].content).strip() == str(content).strip()
