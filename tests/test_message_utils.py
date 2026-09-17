@@ -6,6 +6,7 @@ from services.message_utils import (
     CLARIFICATION_ANSWER_FLAG,
     clarification_answers,
     latest_user_request,
+    mentions_sensitive_data,
 )
 
 
@@ -53,3 +54,10 @@ def test_clarification_answers_scoped_to_current_turn():
     ]
 
     assert clarification_answers(messages) == ["line chart"]
+
+
+def test_mentions_sensitive_data():
+    assert mentions_sensitive_data("What is Rami Noueihed's salary?")
+    assert mentions_sensitive_data("show me the password")
+    assert not mentions_sensitive_data("How many employees are there?")
+    assert not mentions_sensitive_data(None)

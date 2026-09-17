@@ -9,7 +9,11 @@ from langchain_core.runnables import RunnableConfig
 
 from state.state import SupervisorState, TaskRecord, SpecialistResult
 from state.structure_output import SupervisorDecision, ClarificationOutput
-from services.message_utils import clarification_answers, latest_user_request
+from services.message_utils import (
+    clarification_answers,
+    latest_user_request,
+    mentions_sensitive_data,
+)
 from services.llm import llm
 from services.memory import format_facts_for_prompt
 from services.errors import classify_llm_error
@@ -95,6 +99,13 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
             decision = get_supervisor_decision(context, llm())
         except Exception as e:
             raise RuntimeError(f"Supervisor LLM call failed: {e}") from e
+
+    if decision is None:
+        request = latest_user_request(state.messages) or ""
+        if mentions_sensitive_data(request):
+            decision = SupervisorDecision(next="sql", current_task=request)
+        else:
+            decision = SupervisorDecision(next="convo", current_task=_OUTAGE_TASK)
 
     decision = post_decision_guards(state, decision, task_history)
     decision = enforce_task_history_guard(state, decision, task_history)
@@ -414,7 +425,7 @@ def build_prompt(context: dict, previous_error: str | None = None) -> list:
     return messages
 
 
-def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> SupervisorDecision:
+def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> Optional[SupervisorDecision]:
     last_error: str | None = None
     last_class: str | None = None  # most recent attempt only
 
@@ -457,11 +468,8 @@ def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> Supe
         logger.error("supervisor_llm_transient_outage")
         return SupervisorDecision(next="convo", current_task=_OUTAGE_TASK)
 
-    logger.error("all_structured_output_attempts_failed_fallback_to_clarification")
-    return SupervisorDecision(
-        next="clarification",
-        current_task="Could not determine the best specialist. Please rephrase the request.",
-)
+    logger.error("all_structured_output_attempts_failed")
+    return None
 
 
 def get_current_turn(state: SupervisorState) -> int:

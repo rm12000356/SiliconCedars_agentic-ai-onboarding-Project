@@ -267,6 +267,25 @@ def test_intent_ignores_bar_substring():
     assert not _user_wants_visualization(state)
 
 
+def test_routing_failure_sensitive_routes_to_sql(monkeypatch):
+    monkeypatch.setattr("agents.supervisor.get_supervisor_decision", lambda *a, **k: None)
+    state = _state(text="What is Rami Noueihed's salary?", turn_count=1)
+
+    update = supervisor_agent(state, {"configurable": {}})
+
+    assert update["next"] == "sql"
+    assert "salary" in update["current_task"].lower()
+
+
+def test_routing_failure_non_sensitive_routes_to_convo(monkeypatch):
+    monkeypatch.setattr("agents.supervisor.get_supervisor_decision", lambda *a, **k: None)
+    state = _state(text="Tell me something interesting.", turn_count=1)
+
+    update = supervisor_agent(state, {"configurable": {}})
+
+    assert update["next"] == "convo"
+
+
 def test_same_route_cap_forces_end():
     history = [
         _record(route="sql", task="a"),

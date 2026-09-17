@@ -6,6 +6,14 @@ from langchain_core.messages import HumanMessage
 
 CLARIFICATION_ANSWER_FLAG = "is_clarification_answer"
 
+SENSITIVE_KEYWORDS = ("salary", "salaries", "credential", "password")
+
+
+def mentions_sensitive_data(text: str | None) -> bool:
+    """True if text mentions data guarded by elevated permissions."""
+    lowered = (text or "").lower()
+    return any(keyword in lowered for keyword in SENSITIVE_KEYWORDS)
+
 def content_to_text(content) -> str:
     """Normalise str | list[str|dict] (multimodal) content to a single string."""
     if content is None:

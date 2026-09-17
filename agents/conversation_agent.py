@@ -1,6 +1,6 @@
 import logging
 
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage
 from state.state import SupervisorState, SpecialistResult
 from services.llm import llm
 
@@ -32,10 +32,9 @@ def Convo(state: SupervisorState) -> dict:
 
     model = llm()
 
-    msg = [
-        SystemMessage(content=CONVO_SYSTEM_PROMPT),
-        HumanMessage(content=state.current_task),
-    ]
+    recent = state.messages[-6:] if len(state.messages) > 6 else state.messages
+    system = f"{CONVO_SYSTEM_PROMPT}\n\nTask: {state.current_task}"
+    msg = [SystemMessage(content=system), *recent]
 
     response = model.invoke(msg)
 

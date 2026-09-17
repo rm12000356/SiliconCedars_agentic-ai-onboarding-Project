@@ -4,6 +4,7 @@ from langchain_core.messages import HumanMessage, ToolMessage, SystemMessage, AI
 from langchain_core.runnables import RunnableConfig
 from state.state import SupervisorState, SpecialistResult
 from services.llm import llm
+from services.message_utils import mentions_sensitive_data
 from tools.database import GENERAL_TOOLS, ELEVATED_TOOLS
 from decimal import Decimal
 from groq import BadRequestError
@@ -57,10 +58,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
     logger.debug("[SQL] permission_level=%r", permission_level)
     logger.debug("[SQL] current_task=%r", state.current_task)
 
-    task_lower = state.current_task.lower()
-    sensitive = any(k in task_lower for k in ["salary", "salaries", "credential", "password"])
-
-    if permission_level != "elevated" and sensitive:
+    if permission_level != "elevated" and mentions_sensitive_data(state.current_task):
         return {
             "last_result": SpecialistResult(
                 source="sql",
