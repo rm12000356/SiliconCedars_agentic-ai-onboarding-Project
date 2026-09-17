@@ -1,6 +1,10 @@
+import logging
+
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from state.state import SubGraphSupervisorState , SubDecision
 from services.llm import llm
+
+logger = logging.getLogger(__name__)
 
 SUB_SUPERVISOR_PROMPT = """You are the controller of a research subgraph inside a larger multi-agent system.
 
@@ -89,18 +93,18 @@ def _clean_latest_content(messages, max_chars: int = 2000) -> str:
 def Sub_controler(state: SubGraphSupervisorState) -> dict:
 
     if state.report_written:
-        print("[SUB-SUPERVISOR] report already written, ending research subgraph")
+        logger.debug("[SUB-SUPERVISOR] report already written, ending research subgraph")
         return {"next": "end"}
-    
+
     if state.research_attempts >= MAX_RESEARCH_ATTEMPTS:
-        print(
-            f"[SUB-SUPERVISOR] research_attempts={state.research_attempts} >= "
-            f"{MAX_RESEARCH_ATTEMPTS}, forcing report"
+        logger.debug(
+            "[SUB-SUPERVISOR] research_attempts=%s >= %s, forcing report",
+            state.research_attempts, MAX_RESEARCH_ATTEMPTS,
         )
         return {"next": "report"}
 
     if state.research_attempts >= 1 and _has_substantial_note(state.research_messages):
-        print("[SUB-SUPERVISOR] substantial research note already present → forcing report")
+        logger.debug("[SUB-SUPERVISOR] substantial research note already present -> forcing report")
         return {"next": "report"}
 
     model = llm().with_structured_output(SubDecision)
@@ -120,7 +124,7 @@ def Sub_controler(state: SubGraphSupervisorState) -> dict:
     else:
         decision = SubDecision.model_validate(raw)
 
-    print(f"[SUB-SUPERVISOR] next={decision.next} | reason={decision.reason}")
+    logger.debug("[SUB-SUPERVISOR] next=%s | reason=%s", decision.next, decision.reason)
 
     update: dict[str, object] = {"next": decision.next}
 

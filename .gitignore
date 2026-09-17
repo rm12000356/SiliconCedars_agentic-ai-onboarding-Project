@@ -29,3 +29,7 @@ htmlcov/
 
 # LangGraph / LangSmith local artifacts
 .langgraph_api/
+
+# Generated chart artifacts
+outputs/
+.chainlit_charts/

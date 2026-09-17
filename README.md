@@ -30,12 +30,11 @@ The LLM is only consulted for genuinely novel routing decisions.
   * `llm.py`: Groq with OpenRouter fallback
   * `memory.py`: Checkpointer and long-term user memory
   * `errors.py`: Authentication vs. transient LLM error classification
+  * `chart_storage.py`: Local storage client and authenticated chart serving
+  * `logging_config.py`: LOG_LEVEL-driven logging setup
 
 * `evaluation/`
   LangSmith evaluation for routing via `task_history`, RAG grounding, and correctness.
-
-* `config/`
-  Reserved for centralized settings. Not yet populated.
 
 * `db/`
   Docker/Postgres initialization, including schema, roles, and pgvector.
@@ -114,8 +113,15 @@ Optional variables with defaults:
 ```env
 DEFAULT_USER_ID=test-user-1
 DEFAULT_THREAD_ID=thread-test-user-1
-DEFAULT_PERMISSION_LEVEL=elevated   # "general" or "elevated"
+DEFAULT_PERMISSION_LEVEL=general    # "general" or "elevated"
 CHECKPOINT_BACKEND=memory            # "memory" or "postgres"
+LOG_LEVEL=INFO                       # DEBUG, INFO, WARNING, ERROR
+DB_POOL_MIN_SIZE=1
+DB_POOL_MAX_SIZE_GENERAL=5
+DB_POOL_MAX_SIZE_ELEVATED=3
+DB_POOL_ACQUIRE_TIMEOUT=30
+DB_CONNECT_TIMEOUT=5
+CHART_STORAGE_DIR=.chainlit_charts
 ```
 
 Use `general` unless you are explicitly testing salary or credential paths.
@@ -253,11 +259,11 @@ from evaluation.evaluation import (
     run_rag_evaluation,
 )
 
-with get_checkpointer() as memory:
-    graph = Main_WorkFlow(memory)
+memory, _ = get_checkpointer()
+graph = Main_WorkFlow(memory)
 
-    run_routing_evaluation("routing-eval-v1", graph)
-    run_rag_evaluation("rag-eval-v1")
+run_routing_evaluation("routing-eval-v1", graph)
+run_rag_evaluation("rag-eval-v1")
 ```
 
 ### Routing Evaluation
@@ -276,8 +282,14 @@ LLM-as-judge correctness is used only when a reference answer exists.
 
 ## Known Limitations
 
-* **No real authentication**
-  `user_id` and `permission_level` come from the entry-point configuration rather than a verified identity.
+* **CLI has no real authentication**
+  The `main.py` CLI reads `user_id` and `permission_level` from its configuration rather than a verified identity. The Chainlit entry point (`chat.py`) authenticates against `app_users` with bcrypt and derives `permission_level` from the logged-in user.
+
+* **Charts in the web UI**
+  The Chainlit entry point renders the generated PNG inline (`cl.Image`). Element
+  files are persisted by a local storage client and served through an
+  authenticated `/charts/<token>` route, so charts survive a page refresh. The
+  `main.py` CLI prints the file path instead of rendering the image.
 
 * **No cross-turn data chaining**
   Requests such as `"chart that"` after a previous `Finalize` are not supported. Same-turn SQL → visualization is supported.

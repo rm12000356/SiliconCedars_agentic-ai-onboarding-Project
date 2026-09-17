@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal, cast
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from agents.supervisor import (
     MAX_HOPS_PER_TURN,
@@ -22,6 +22,7 @@ from agents.supervisor import (
 )
 from state.state import SpecialistResult, SupervisorState, TaskRecord
 from state.structure_output import SupervisorDecision
+from services.message_utils import CLARIFICATION_ANSWER_FLAG
 
 
 def _record(
@@ -50,6 +51,7 @@ def _state(
     current_task: str | None = None,
     task_history: list[TaskRecord] | None = None,
     turn_count: int = 1,
+    clarification_count: int = 0,
     messages=None,
 ) -> SupervisorState:
     return SupervisorState(
@@ -58,6 +60,7 @@ def _state(
         current_task=current_task,
         task_history=task_history or [],
         turn_count=turn_count,
+        clarification_count=clarification_count,
     )
 
 
@@ -206,6 +209,83 @@ def test_user_wants_visualization_multimodal_content():
     assert _user_wants_visualization(state)
 
 
+def test_user_wants_visualization_from_clarification_answer():
+    state = SupervisorState(
+        messages=[
+            HumanMessage(content="show me the sales numbers"),
+            AIMessage(content="Which view would you like?"),
+            HumanMessage(
+                content="as a pie chart",
+                additional_kwargs={CLARIFICATION_ANSWER_FLAG: True},
+            ),
+        ],
+        turn_count=1,
+    )
+
+    assert _user_wants_visualization(state)
+
+
+def test_intent_from_bare_pie_answer():
+    state = SupervisorState(
+        messages=[
+            HumanMessage(content="show me the sales numbers"),
+            AIMessage(content="Which view would you like?"),
+            HumanMessage(
+                content="as a pie",
+                additional_kwargs={CLARIFICATION_ANSWER_FLAG: True},
+            ),
+        ],
+        turn_count=1,
+    )
+
+    assert _user_wants_visualization(state)
+
+
+def test_stale_clarification_answer_does_not_trigger_visualization():
+    state = SupervisorState(
+        messages=[
+            HumanMessage(content="show me a chart of sales"),
+            AIMessage(content="Which view would you like?"),
+            HumanMessage(
+                content="pie chart",
+                additional_kwargs={CLARIFICATION_ANSWER_FLAG: True},
+            ),
+            HumanMessage(content="what were total sales last quarter?"),
+        ],
+        turn_count=2,
+    )
+
+    assert not _user_wants_visualization(state)
+
+
+def test_intent_ignores_bar_substring():
+    state = SupervisorState(
+        messages=[HumanMessage(content="How is the Barcelona office doing?")],
+        turn_count=1,
+    )
+
+    assert not _user_wants_visualization(state)
+
+
+def test_routing_failure_sensitive_routes_to_sql(monkeypatch):
+    monkeypatch.setattr("agents.supervisor.get_supervisor_decision", lambda *a, **k: None)
+    state = _state(text="What is Rami Noueihed's salary?", turn_count=1)
+
+    update = supervisor_agent(state, {"configurable": {}})
+
+    assert update["next"] == "sql"
+    assert "salary" in update["current_task"].lower()
+
+
+def test_routing_failure_non_sensitive_routes_to_convo(monkeypatch):
+    monkeypatch.setattr("agents.supervisor.get_supervisor_decision", lambda *a, **k: None)
+    state = _state(text="Tell me something interesting.", turn_count=1)
+
+    update = supervisor_agent(state, {"configurable": {}})
+
+    assert update["next"] == "convo"
+
+
 def test_same_route_cap_forces_end():
     history = [
         _record(route="sql", task="a"),
@@ -226,21 +306,18 @@ def test_refuse_reroute_to_just_finished_specialist():
     assert guarded.next == "end"
 
 
-def test_second_clarification_in_same_turn_ends():
-    history = [
-        TaskRecord.model_construct(
-            turn=1,
-            route="clarification",
-            task="please clarify",
-            status="done",
-            result_summary="asked",
-            issue=None,
-        )
-    ]
-    state = _state(text="still unclear", task_history=history)
+def test_first_clarification_in_same_turn_is_allowed():
+    state = _state(text="still unclear", clarification_count=0)
+    decision = SupervisorDecision(next="clarification", current_task="ask once")
+    guarded = post_decision_guards(state, decision, [])
+    assert guarded.next == "clarification"
+
+
+def test_clarification_cap_routes_to_convo():
+    state = _state(text="still unclear", clarification_count=1)
     decision = SupervisorDecision(next="clarification", current_task="ask again")
-    guarded = post_decision_guards(state, decision, history)
-    assert guarded.next == "end"
+    guarded = post_decision_guards(state, decision, [])
+    assert guarded.next == "convo"
 
 
 def test_duplicate_completed_task_blocked():

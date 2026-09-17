@@ -1,9 +1,13 @@
 import pytest
 from state.state import SupervisorState
 from agents.rag_agent import RAG
+from tests.conftest import requires_db, requires_llm
 
 
 @pytest.mark.integration
+@pytest.mark.llm
+@requires_llm
+@requires_db
 def test_rag_finds_real_match():
     state = SupervisorState(
         messages=[],
@@ -20,6 +24,9 @@ def test_rag_finds_real_match():
 
 
 @pytest.mark.integration
+@pytest.mark.llm
+@requires_llm
+@requires_db
 def test_rag_reports_no_match_honestly():
     state = SupervisorState(
         messages=[],

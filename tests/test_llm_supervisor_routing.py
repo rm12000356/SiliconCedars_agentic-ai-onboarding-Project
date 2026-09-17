@@ -182,6 +182,7 @@ def _route(prompt: str) -> str:
     )
     context = gather_context(state, task_history=[], user_id=None)
     decision = get_supervisor_decision(context, llm())
+    assert decision is not None, "supervisor routing returned no decision"
     return decision.next
 
 

@@ -1,5 +1,6 @@
 import ipaddress
 import socket
+import threading
 from urllib.parse import urlparse, urljoin
 
 import requests
@@ -17,7 +18,7 @@ ALLOWED_CONTENT_TYPES = ("text/html", "text/plain", "application/xhtml+xml")
 ALLOWED_PORTS = (80, 443)
 
 _original_create_connection = urllib3_conn.create_connection
-
+_PIN_LOCK = threading.Lock()
 
 def _is_blocked_ip(ip_str: str) -> bool:
     """
@@ -38,9 +39,8 @@ def _is_blocked_ip(ip_str: str) -> bool:
         or ip.is_unspecified
     )
 
-'''
-this tools cant work on pararel, therer will be crosstalk 
-'''
+
+
 
 def _resolve_and_validate(url: str) -> str:
     """
@@ -160,17 +160,19 @@ def fetch_page(url: str, snippet: str = "") -> str:
                 "User-Agent": "Mozilla/5.0 (compatible; ResearchAgent/1.0)"
             }
 
-            urllib3_conn.create_connection = _pin_connection(pinned_ip)
-            try:
-                response = requests.get(
-                    current_url,
-                    headers=headers,
-                    timeout=REQUEST_TIMEOUT,
-                    allow_redirects=False,
-                    stream=True,
-                )
-            finally:
-                urllib3_conn.create_connection = _original_create_connection
+            with _PIN_LOCK:
+                previous_create_connection = urllib3_conn.create_connection
+                urllib3_conn.create_connection = _pin_connection(pinned_ip)
+                try:
+                    response = requests.get(
+                        current_url,
+                        headers=headers,
+                        timeout=REQUEST_TIMEOUT,
+                        allow_redirects=False,
+                        stream=True,
+                    )
+                finally:
+                    urllib3_conn.create_connection = previous_create_connection
 
             if response.is_redirect or response.is_permanent_redirect:
                 location = response.headers.get("Location")

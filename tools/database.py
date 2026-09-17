@@ -2,7 +2,6 @@ from psycopg import sql
 from db.connection import get_elevated_connection, get_general_connection
 from langchain.tools import tool
 
-# Static data for the lessons_learned table. This is a fixed, gated tool, so it uses the elevated connection.
 @tool
 def get_salary(employee_id: int) -> dict:
     """
@@ -51,6 +50,9 @@ def run_general_query(query_text: str) -> list[dict]:
     stripped = query_text.strip()
     if stripped.endswith(";"):
         stripped = stripped[:-1]
+    # Not quote/comment aware, so a literal ';' inside a string or comment is
+    # rejected too. The real boundary is the Postgres role; this is a
+    # convenience guard, not a security control.
     if ";" in stripped:
         raise ValueError(
             "Multiple SQL statements are not allowed in a single query. "
@@ -59,10 +61,9 @@ def run_general_query(query_text: str) -> list[dict]:
 
     with get_general_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql.SQL(query_text))
+            cur.execute(sql.SQL(stripped))
 
             if cur.description is None:
-                # No results to fetch (e.g., for INSERT, UPDATE, DELETE)
                 return []
 
             columns = [desc[0] for desc in cur.description]

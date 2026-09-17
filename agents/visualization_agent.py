@@ -1,5 +1,7 @@
+import logging
 import math
 import os
+import re
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -12,8 +14,11 @@ import matplotlib.pyplot as plt
 from state.state import SupervisorState, SpecialistResult, ChartSpec
 from services.llm import llm
 from langchain_core.messages import HumanMessage
+from services.message_utils import clarification_answers, latest_user_request
 
 OUTPUT_DIR = Path("outputs")
+
+logger = logging.getLogger(__name__)
 
 CHART_EXTRACTION_PROMPT = """
 Extract a chart specification from the user's request.
@@ -45,7 +50,7 @@ def Visualization(state: SupervisorState) -> dict:
             "missing_current_task",
         )
 
-    print(f"[VISU] current_task={state.current_task!r}")
+    logger.debug("[VISU] current_task=%r", state.current_task)
 
     try:
 
@@ -53,9 +58,9 @@ def Visualization(state: SupervisorState) -> dict:
             state.last_result is not None
             and state.last_result.structured_data
         ):
-            print(
-                "[VISU] using structured_data from "
-                f"{state.last_result.source}"
+            logger.debug(
+                "[VISU] using structured_data from %s",
+                state.last_result.source,
             )
 
             spec = _extract_structured_rows(
@@ -65,14 +70,12 @@ def Visualization(state: SupervisorState) -> dict:
             spec = spec.model_copy(
                 update={
                     "title": _title_from_user_request(state),
-                    "chart_type": _chart_type_from_task(
-                        state.current_task
-                    ),
+                    "chart_type": _resolve_chart_type(state),
                 }
             )
 
         else:
-            print("[VISU] no structured_data, using LLM extraction")
+            logger.debug("[VISU] no structured_data, using LLM extraction")
 
             spec = _extract_from_task(state.current_task)
 
@@ -80,26 +83,24 @@ def Visualization(state: SupervisorState) -> dict:
 
         _validate_spec(spec)
 
-        print(f"[VISU] chart_spec={spec!r}")
+        logger.debug("[VISU] chart_spec=%r", spec)
 
 
         filepath = _render_chart(spec)
 
-        print(f"[VISU] saved chart to {filepath}")
+        logger.debug("[VISU] saved chart to %s", filepath)
 
         return {
             "last_result": SpecialistResult(
                 source="visu",
-                summary=(
-                    f"Chart '{spec.title}' created successfully "
-                    f"and saved to {filepath}."
-                ),
+                summary=f"Here's the chart: {spec.title}.",
                 status="done",
-            )
+            ),
+            "chart_path": str(filepath),
         }
 
     except ValueError as exc:
-        print(f"[VISU] validation failure: {exc}")
+        logger.warning("[VISU] validation failure: %s", exc)
 
         return _failed_result(
             "The visualization request did not contain valid chart data.",
@@ -107,7 +108,7 @@ def Visualization(state: SupervisorState) -> dict:
         )
 
     except Exception as exc:
-        print(f"[VISU] rendering/extraction failure: {exc}")
+        logger.warning("[VISU] rendering/extraction failure: %s", exc)
 
         return _failed_result(
             "The visualization could not be generated.",
@@ -122,7 +123,8 @@ def _failed_result(summary: str, issue: str) -> dict:
             summary=summary,
             status="failed",
             issue=issue,
-        )
+        ),
+        "chart_path": None,
     }
 
 
@@ -281,12 +283,7 @@ def _render_chart(spec: ChartSpec) -> Path:
 
 
 def _title_from_task(task: str) -> str:
-    """
-    Deterministic title fallback.
-
-    We deliberately do not ask another LLM call just to produce a title.
-    """
-
+    """Deterministic title fallback (no extra LLM call just for a title)."""
     cleaned = " ".join(task.split())
 
     if len(cleaned) <= 80:
@@ -295,42 +292,63 @@ def _title_from_task(task: str) -> str:
     return cleaned[:77].rstrip() + "..."
 
 def _title_from_user_request(state: SupervisorState) -> str:
-    """
-    Prefer the original user request over the supervisor's internal task
-    description. Falls back to the task string if no HumanMessage is found.
-    """
-    for m in reversed(state.messages):
-        if isinstance(m, HumanMessage):
-            text = m.content if isinstance(m.content, str) else str(m.content)
-            text = " ".join(text.split())
+    """Prefer the original user request over the internal task description.
+    Clarification answers are skipped (they made bad titles like "2024")."""
+    text = latest_user_request(state.messages)
 
-            lower = text.lower()
-            for prefix in (
-                "show me a ", "show me ", "create a ", "make a ",
-                "draw a ", "plot ", "visualize ", "visualise ",
-            ):
-                if lower.startswith(prefix):
-                    text = text[len(prefix):]
-                    break
+    if text:
+        lower = text.lower()
+        for prefix in (
+            "show me a ", "show me ", "create a ", "make a ",
+            "draw a ", "plot ", "visualize ", "visualise ",
+        ):
+            if lower.startswith(prefix):
+                text = text[len(prefix):]
+                break
 
-            return text[:80] if len(text) <= 80 else text[:77].rstrip() + "..."
+        return text[:80] if len(text) <= 80 else text[:77].rstrip() + "..."
 
-    # fallback
     return _title_from_task(state.current_task or "Chart")
 
-def _chart_type_from_task(task: str) -> Literal["bar", "line", "pie"]:
-    """
-    Deterministic chart-type selection for structured specialist data.
 
-    Explicit user intent wins. Bar is the safe default.
-    """
+def _explicit_chart_type(text: str) -> Literal["bar", "line", "pie"] | None:
+    """Explicit chart type in text, or None so _resolve_chart_type can try
+    the other sources before defaulting."""
+    lowered = (text or "").lower()
 
-    text = task.lower()
-
-    if "pie chart" in text or "pie graph" in text:
+    if "pie chart" in lowered or "pie graph" in lowered:
         return "pie"
 
-    if "line chart" in text or "line graph" in text:
+    if "line chart" in lowered or "line graph" in lowered:
         return "line"
+
+    if re.search(r"\bpie(s)?\b", lowered):
+        return "pie"
+
+    if re.search(r"\bline\b", lowered):
+        return "line"
+
+    if re.search(r"\bbar(s)?\b", lowered):
+        return "bar"
+
+    return None
+
+
+def _chart_type_from_task(task: str) -> Literal["bar", "line", "pie"]:
+    """Deterministic chart-type selection; explicit intent wins, bar is the default."""
+    return _explicit_chart_type(task) or "bar"
+
+
+def _resolve_chart_type(state: SupervisorState) -> Literal["bar", "line", "pie"]:
+    """Resolve the chart type, newest intent first: clarification answers,
+    then the original request, then the internal task. Defaults to bar."""
+    sources: list[str | None] = list(reversed(clarification_answers(state.messages)))
+    sources.append(latest_user_request(state.messages))
+    sources.append(state.current_task)
+
+    for text in sources:
+        explicit = _explicit_chart_type(text or "")
+        if explicit:
+            return explicit
 
     return "bar"

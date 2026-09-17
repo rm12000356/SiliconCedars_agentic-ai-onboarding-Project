@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Callable
 
@@ -9,6 +10,8 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 PRIMARY_MODEL = "openai/gpt-oss-120b"
 
@@ -21,6 +24,7 @@ FALLBACK_MODELS = [
 OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504, 529}
+NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 422}
 
 
 RETRYABLE_TEXT_MARKERS = (
@@ -37,21 +41,34 @@ RETRYABLE_TEXT_MARKERS = (
     "model_not_found",
 )
 
-
-def _is_retryable(exc: Exception) -> bool:
+def _resolve_status(exc: Exception) -> int | None:
     status_code = getattr(exc, "status_code", None)
-    if isinstance(status_code, int) and status_code in RETRYABLE_STATUS_CODES:
-        return True
+    if isinstance(status_code, int):
+        return status_code
 
     # Some client libraries nest the real HTTP status on a `.response`.
     response = getattr(exc, "response", None)
     nested_status = getattr(response, "status_code", None)
-    if isinstance(nested_status, int) and nested_status in RETRYABLE_STATUS_CODES:
-        return True
+    if isinstance(nested_status, int):
+        return nested_status
+
+    return None
+
+
+def _is_retryable(exc: Exception) -> bool:
+    status = _resolve_status(exc)
+
+    # An explicit status is authoritative in both directions.
+    if status is not None:
+        if status in RETRYABLE_STATUS_CODES:
+            return True
+        if status in NON_RETRYABLE_STATUS_CODES:
+            return False
+        # Unknown status (e.g. 404 decommissioned): fall through to the text
+        # markers below.
 
     text = str(exc).lower()
     return any(marker in text for marker in RETRYABLE_TEXT_MARKERS)
-
 
 class ResilientLLM:
 
@@ -85,19 +102,28 @@ class ResilientLLM:
             try:
                 client = self._build(factory)
             except Exception as e:
-                print(f"[LLM] {label} unavailable while constructing client: {type(e).__name__}: {e}")
+                logger.warning(
+                    "[LLM] %s unavailable while constructing client: %s: %s",
+                    label, type(e).__name__, e,
+                )
                 last_exc = e
                 continue
 
             try:
-                print(f"[LLM] Trying {label}")
+                logger.info("[LLM] Trying %s", label)
                 return client.invoke(*args, **kwargs)
             except Exception as e:
                 last_exc = e
                 if _is_retryable(e):
-                    print(f"[LLM] {label} failed ({type(e).__name__}: {e}) → trying next model")
+                    logger.warning(
+                        "[LLM] %s failed (%s: %s) -> trying next model",
+                        label, type(e).__name__, e,
+                    )
                     continue
-                print(f"[LLM] {label} failed with non-retryable error: {type(e).__name__}: {e}")
+                logger.error(
+                    "[LLM] %s failed with non-retryable error: %s: %s",
+                    label, type(e).__name__, e,
+                )
                 raise
 
         raise RuntimeError(

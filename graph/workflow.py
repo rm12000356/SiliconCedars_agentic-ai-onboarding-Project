@@ -1,5 +1,4 @@
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.memory import MemorySaver
 from services.memory import get_checkpointer
 from agents.finalize import Finalize
 from agents.memory_manager import memory_manager
@@ -17,6 +16,11 @@ from agents.sql_agent import Sql_agent
 from agents.visualization_agent import Visualization
 from agents.clarification import Clarification
 from agents.research.research_node import make_research_node
+
+
+def has_pending_interrupt(snapshot) -> bool:
+    """True if the last checkpoint left a pending interrupt (e.g. clarification)."""
+    return bool(getattr(snapshot, "interrupts", ()) or ())
 
 
 def Main_WorkFlow(memory = None):
@@ -66,13 +70,8 @@ def Main_WorkFlow(memory = None):
 
 
 
-    graph =builder.compile(checkpointer=memory)
+    graph = builder.compile(checkpointer=memory)
 
-    #png = graph.get_graph().draw_mermaid_png()
-
-    #with open("graph_structure.png", "wb") as f:
-    #    f.write(png)
-        
     return graph
 
 def sub_workflow():

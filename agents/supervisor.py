@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
-from pydantic import ValidationError
 
 from state.state import SupervisorState, TaskRecord, SpecialistResult
-from state.structure_output import SupervisorDecision
+from state.structure_output import SupervisorDecision, ClarificationOutput
+from services.message_utils import (
+    clarification_answers,
+    latest_user_request,
+    mentions_sensitive_data,
+)
 from services.llm import llm
 from services.memory import format_facts_for_prompt
 from services.errors import classify_llm_error
@@ -17,6 +22,7 @@ logger = logging.getLogger("supervisor")
 
 MAX_HOPS_PER_TURN = 6
 MAX_SAME_ROUTE_PER_TURN = 2
+MAX_CLARIFICATIONS_PER_TURN = 1
 
 SUPERVISOR_SYSTEM_PROMPT = """You are the routing supervisor for a company intelligence assistant.
 
@@ -53,17 +59,16 @@ _OUTAGE_TASK = (
     "Do not invent an answer."
 )
 
+CLARIFICATION_QUESTION_PROMPT = (
+    "Generate one concise clarification question that will help resolve the "
+    "user's ambiguous request. Ask exactly one question."
+)
+
 def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
-    """
-    1. Record the previous specialist result into task_history (if any).
-    2. Try a deterministic decision.
-    3. Fall back to LLM only when necessary.
-    4. Always apply post-guards.
-    5. Map the final decision into a state update.
-    """
+    """Record the prior result, decide deterministically if possible, then
+    apply post-guards and map the decision into a state update."""
     task_history = list(state.task_history)
 
-    # ----- 1. Record previous work -----
     if state.last_result is not None and state.current_task:
         current_turn = get_current_turn(state)
         task_record = TaskRecord(
@@ -85,7 +90,6 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
             },
         )
 
-    # ----- 2. Deterministic first -----
     decision = deterministic_decision(state, task_history)
 
     if decision is None:
@@ -96,7 +100,13 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
         except Exception as e:
             raise RuntimeError(f"Supervisor LLM call failed: {e}") from e
 
-    # ----- 4. Post-guards (always) -----
+    if decision is None:
+        request = latest_user_request(state.messages) or ""
+        if mentions_sensitive_data(request):
+            decision = SupervisorDecision(next="sql", current_task=request)
+        else:
+            decision = SupervisorDecision(next="convo", current_task=_OUTAGE_TASK)
+
     decision = post_decision_guards(state, decision, task_history)
     decision = enforce_task_history_guard(state, decision, task_history)
 
@@ -105,10 +115,36 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
         extra={"next": decision.next, "current_task": decision.current_task},
     )
 
-    # ----- 5. Map to state update -----
     update = map_to_state(decision)
     update["task_history"] = task_history
+
+    if decision.next == "clarification":
+        update["clarification_question"] = _generate_clarification_question(decision)
+
     return update
+
+
+def _generate_clarification_question(decision: SupervisorDecision) -> str:
+    """Best-effort. A failure here must not break the turn."""
+    try:
+        model = llm().with_structured_output(ClarificationOutput)
+        result = model.invoke([
+            SystemMessage(content=CLARIFICATION_QUESTION_PROMPT),
+            HumanMessage(
+                content=decision.current_task or "The user's request was unclear."
+            ),
+        ])
+        if not isinstance(result, ClarificationOutput):
+            result = ClarificationOutput.model_validate(result)
+        question = (result.question or "").strip()
+        if question:
+            return question
+    except Exception as e:
+        logger.warning(
+            "clarification_question_generation_failed",
+            extra={"error": f"{type(e).__name__}: {e}"},
+        )
+    return "Could you clarify what you'd like me to do?"
 
 
 def deterministic_decision(
@@ -119,17 +155,14 @@ def deterministic_decision(
     turn_history = [r for r in task_history if r.turn == current_turn]
     lr: Optional[SpecialistResult] = state.last_result
 
-    # Hard hop limit
     if len(turn_history) >= MAX_HOPS_PER_TURN:
         logger.warning(
             "hop_limit_reached",
             extra={"limit": MAX_HOPS_PER_TURN, "turn": current_turn},
         )
         return SupervisorDecision(next="end", current_task="")
-   
-    if lr is not None:
 
-        
+    if lr is not None:
         if (
             lr.status == "done"
             and lr.structured_data
@@ -153,7 +186,6 @@ def deterministic_decision(
                 current_task="Tell the user internal search is temporarily unavailable. Do not invent an answer.",
             )
         
-        # Terminal permission failure
         if lr.issue == "permission_denied":
             already_explained = any(
                 r.route == "convo" and r.status == "done" for r in turn_history
@@ -171,7 +203,6 @@ def deterministic_decision(
                 ),
             )
 
-        # RAG found nothing
         if lr.source == "rag" and lr.issue == "no_matching_documents":
             logger.debug("rag_no_matching_documents")
             return SupervisorDecision(
@@ -182,7 +213,6 @@ def deterministic_decision(
                 ),
             )
 
-        # Same specialist already failed/partial once → explain & stop
         same_route_failures = [
             r for r in turn_history
             if r.route == lr.source and r.status in ("partial", "failed")
@@ -204,33 +234,26 @@ def deterministic_decision(
 
 
 def _user_wants_visualization(state: SupervisorState) -> bool:
-    """Very lightweight intent check — only looks at the latest human message."""
+    """
+    Lightweight chart-intent check.
+
+    Looks at the latest request plus any clarification answers, so an answer
+    like "as a pie chart" still counts even though latest_user_request
+    deliberately skips tagged clarification answers.
+    """
     if not state.messages:
         return False
 
-    last_human_content = None
-    for m in reversed(state.messages):
-        if isinstance(m, HumanMessage):
-            last_human_content = m.content
-            break
-
-    if last_human_content is None:
+    parts = [latest_user_request(state.messages), *clarification_answers(state.messages)]
+    text = " ".join(part for part in parts if part).lower()
+    if not text:
         return False
 
-    # content can be str or list (multimodal). Normalize to a single lowercase string.
-    if isinstance(last_human_content, list):
-        text_parts = []
-        for part in last_human_content:
-            if isinstance(part, str):
-                text_parts.append(part)
-            elif isinstance(part, dict) and part.get("type") == "text":
-                text_parts.append(str(part.get("text", "")))
-        text = " ".join(text_parts).lower()
-    else:
-        text = str(last_human_content).lower()
-
-    keywords = ["chart", "graph", "plot", "visualize", "visualise", "bar", "pie", "line chart"]
-    return any(k in text for k in keywords)
+    if "line chart" in text or "line graph" in text:
+        return True
+    return bool(
+        re.search(r"\b(chart|graph|plot|visuali[sz]e|bar|bars|pie|pies)\b", text)
+    )
 
 
 def post_decision_guards(
@@ -251,7 +274,6 @@ def post_decision_guards(
             )
             return SupervisorDecision(next="end", current_task="")
 
-    # After a successful result, never send back to the same specialist
     if (
         state.last_result
         and state.last_result.status == "done"
@@ -265,13 +287,22 @@ def post_decision_guards(
 
     # Only one clarification attempt per turn
     if decision.next == "clarification":
-        clar_count = sum(1 for r in turn_history if r.route == "clarification")
-        # Note: clarification itself is not recorded in task_history in the
-        # current codebase; if you later record it, this becomes active.
-        # For now we keep the check as a future-proof guard.
-        if clar_count >= 1:
-            logger.warning("clarification_already_used")
-            return SupervisorDecision(next="end", current_task="")
+        if state.clarification_count >= MAX_CLARIFICATIONS_PER_TURN:
+            logger.warning(
+                "clarification_cap_hit",
+                extra={"count": state.clarification_count,
+                       "cap": MAX_CLARIFICATIONS_PER_TURN},
+            )
+            # Route to convo, not end, so the user still gets a reply.
+            return SupervisorDecision(
+                next="convo",
+                current_task=(
+                    "The request is still unclear after asking for clarification. "
+                    "Tell the user plainly that you could not determine what they "
+                    "need, and ask them to rephrase with more specifics. "
+                    "Do not invent an answer."
+                ),
+            )
 
     return decision
 
@@ -285,10 +316,7 @@ def enforce_task_history_guard(
     decision: SupervisorDecision,
     task_history: list[TaskRecord],
 ) -> SupervisorDecision:
-    """
-    Block the exact same completed task on the same route within the same turn.
-    (Preserved from the original implementation, with normalized comparison.)
-    """
+    """Block the exact same completed task on the same route within the same turn."""
     if decision.next == "end":
         return decision
 
@@ -331,10 +359,6 @@ def gather_context(
         try:
             known_facts = format_facts_for_prompt(user_id)
         except Exception as e:
-            # Long-term memory is a nice-to-have, not a hard dependency, same
-            # reasoning as Finalize's write-side handling. A DB hiccup here
-            # should degrade this turn's context, not crash the entire graph
-            # on what might just be "hello".
             logger.warning(
                 "known_facts_lookup_failed_continuing_without_it",
                 extra={"error": str(e)},
@@ -355,12 +379,21 @@ def gather_context(
         "last_result": state.last_result,
         "task_history": task_history,
         "known_facts": known_facts,
+        "conversation_summary": state.conversation_summary,
     }
 
 
 def build_prompt(context: dict, previous_error: str | None = None) -> list:
     messages = [SystemMessage(content=SUPERVISOR_SYSTEM_PROMPT)]
 
+    if context.get("conversation_summary"):
+        messages.append(
+            SystemMessage(
+                content=f"[Summary of earlier conversation]: "
+                        f"{context['conversation_summary']}"
+            )
+        )
+    
     if context.get("known_facts"):
         messages.append(SystemMessage(content=context["known_facts"]))
 
@@ -392,7 +425,7 @@ def build_prompt(context: dict, previous_error: str | None = None) -> list:
     return messages
 
 
-def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> SupervisorDecision:
+def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> Optional[SupervisorDecision]:
     last_error: str | None = None
     last_class: str | None = None  # most recent attempt only
 
@@ -435,11 +468,8 @@ def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> Supe
         logger.error("supervisor_llm_transient_outage")
         return SupervisorDecision(next="convo", current_task=_OUTAGE_TASK)
 
-    logger.error("all_structured_output_attempts_failed_fallback_to_clarification")
-    return SupervisorDecision(
-        next="clarification",
-        current_task="Could not determine the best specialist. Please rephrase the request.",
-)
+    logger.error("all_structured_output_attempts_failed")
+    return None
 
 
 def get_current_turn(state: SupervisorState) -> int:
@@ -447,10 +477,7 @@ def get_current_turn(state: SupervisorState) -> int:
 
 
 def map_to_state(decision: SupervisorDecision) -> dict:
-    """
-    Clear last_result when routing to a specialist that should start fresh.
-    Keep it for visu/end so downstream nodes can still read structured_data.
-    """
+    """Clear last_result unless routing to visu/end, which still need structured_data."""
     if decision.next in ("end", "visu"):
         return {
             "next": decision.next,

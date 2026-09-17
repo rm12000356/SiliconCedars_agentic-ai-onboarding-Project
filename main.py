@@ -7,18 +7,18 @@ from evaluation.evaluation import run_routing_evaluation, run_rag_evaluation
 from graph.workflow import Main_WorkFlow
 from agents.clarification import resume_clarification
 from services.memory import get_checkpointer
+from services.logging_config import configure_logging
 
 
 def run():
-    
+    configure_logging()
     memory , memory_context = get_checkpointer()
     try:
         graph = Main_WorkFlow(memory)
 
-        # Stable identities
         user_id = os.getenv("DEFAULT_USER_ID", "test-user-1")
         thread_id = os.getenv("DEFAULT_THREAD_ID", "thread-test-user-1")
-        permission_level = os.getenv("DEFAULT_PERMISSION_LEVEL", "elevated")
+        permission_level = os.getenv("DEFAULT_PERMISSION_LEVEL", "general")
 
         config: RunnableConfig = {
             "configurable": {
@@ -68,6 +68,10 @@ def run():
 
             last_message = result["messages"][-1]
             print(f"\nAssistant: {last_message.content}")
+
+            chart_path = result.get("chart_path")
+            if chart_path:
+                print(f"(chart saved to {chart_path})")
     finally:
         if memory_context is not None:
             memory_context.__exit__(None, None, None)

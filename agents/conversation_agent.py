@@ -1,6 +1,10 @@
-from langchain_core.messages import SystemMessage, HumanMessage
+import logging
+
+from langchain_core.messages import SystemMessage
 from state.state import SupervisorState, SpecialistResult
 from services.llm import llm
+
+logger = logging.getLogger(__name__)
 
 
 CONVO_SYSTEM_PROMPT = """You are the conversational agent for a company intelligence assistant.
@@ -24,14 +28,13 @@ def Convo(state: SupervisorState) -> dict:
             "should always set current_task before routing here."
         )
 
-    print(f"[CONVO] current_task={state.current_task!r}")
+    logger.debug("[CONVO] current_task=%r", state.current_task)
 
     model = llm()
 
-    msg = [
-        SystemMessage(content=CONVO_SYSTEM_PROMPT),
-        HumanMessage(content=state.current_task),
-    ]
+    recent = state.messages[-6:] if len(state.messages) > 6 else state.messages
+    system = f"{CONVO_SYSTEM_PROMPT}\n\nTask: {state.current_task}"
+    msg = [SystemMessage(content=system), *recent]
 
     response = model.invoke(msg)
 
