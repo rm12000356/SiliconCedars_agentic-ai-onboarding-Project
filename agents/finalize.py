@@ -1,6 +1,6 @@
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
-from state.state import  FactExtraction 
+from state.state import FactExtraction
 from state.state import SupervisorState
 from services.llm import llm
 from services.memory import write_fact
@@ -9,6 +9,11 @@ IDENTITY_HINTS = [
     "my name is", "i'm ", "i am ", "call me", "i prefer", "i like",
     "please always", "in the future", "i work in", "i'm from",
 ]
+
+NO_ANSWER_FALLBACK = (
+    "I wasn't able to put together a response for that -- "
+    "could you rephrase or add a bit more detail?"
+)
 
 
 def _might_contain_memorable_info(text: str) -> bool:
@@ -22,6 +27,7 @@ def _latest_human_message(messages) -> str | None:
             return m.content if isinstance(m.content, str) else str(m.content)
     return None
 
+
 def _last_is_ai_message(messages) -> bool:
     if not messages:
         return False
@@ -33,9 +39,20 @@ def _last_is_ai_message(messages) -> bool:
         and not last_message.tool_calls
     )
 
+
+def _turn_has_assistant_output(messages) -> bool:
+    return _last_is_ai_message(messages) and bool(str(messages[-1].content).strip())
+
+
+def _already_delivered(messages, content: str) -> bool:
+
+   
+    if not _last_is_ai_message(messages):
+        return False
+    return str(messages[-1].content).strip() == str(content).strip()
+
+
 def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
-    """
-    """
     update: dict = {}
 
     if state.last_result is not None:
@@ -45,14 +62,11 @@ def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
         else:
             content = f"{result.summary} ({result.issue or 'incomplete'})"
 
-        if not _last_is_ai_message(state.messages):
-            update["messages"] = [AIMessage(content=content)]
-
         if content and content.strip() and not _already_delivered(state.messages, content):
             update["messages"] = [AIMessage(content=content)]
-            
+
         update["last_result"] = None
-        update["clarification_count"]= 0
+        update["clarification_count"] = 0
 
     user_id = (config.get("configurable") or {}).get("user_id")
     latest_human = _latest_human_message(state.messages)
@@ -80,17 +94,7 @@ def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
             # A failed extraction should never break finishing the turn.
             print(f"[MEMORY] fact extraction failed, skipping: {e}")
 
+    if "messages" not in update and not _turn_has_assistant_output(state.messages):
+        update["messages"] = [AIMessage(content=NO_ANSWER_FALLBACK)]
+
     return update
-
-def _already_delivered(messages, content: str) -> bool:
-    """
-    True only if the last message is ALREADY this exact answer.
-
-    Deliberately compares content rather than just position: the old
-    positional check suppressed the answer whenever the thread happened to end
-    on any AIMessage, which would silently drop a specialist's result if a node
-    that emits its own message (Convo) ever stopped being terminal.
-    """
-    if not _last_is_ai_message(messages):
-        return False
-    return str(messages[-1].content).strip() == str(content).strip()

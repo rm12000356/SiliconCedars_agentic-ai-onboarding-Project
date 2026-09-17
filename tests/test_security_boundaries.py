@@ -49,7 +49,6 @@ def test_synonyms_are_not_covered_by_keyword_list(task):
     assert not _keyword_hit(task)
 
 
-@pytest.mark.xfail(reason="CLI default permission_level is 'elevated'; should be 'general'", strict=True)
 def test_cli_default_permission_is_general():
     main = Path(__file__).resolve().parents[1] / "main.py"
     assert 'os.getenv("DEFAULT_PERMISSION_LEVEL", "general")' in main.read_text(encoding="utf-8")

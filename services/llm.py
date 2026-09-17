@@ -109,7 +109,7 @@ class ResilientLLM:
             except Exception as e:
                 last_exc = e
                 if _is_retryable(e):
-                    print(f"[LLM] {label} failed ({type(e).__name__}: {e}) → trying next model")
+                    print(f"[LLM] {label} failed ({type(e).__name__}: {e}) -> trying next model")
                     continue
                 print(f"[LLM] {label} failed with non-retryable error: {type(e).__name__}: {e}")
                 raise

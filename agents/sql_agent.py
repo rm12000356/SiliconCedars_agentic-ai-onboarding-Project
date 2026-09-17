@@ -17,6 +17,8 @@ def _extract_chartable_rows(tool_output) -> list[dict] | None:
     for row in tool_output:
         values = list(row.values())
         label, value = values[0], values[1]
+        if isinstance(value, bool):
+            return None
         if isinstance(value, Decimal):
             value = float(value)
         if not isinstance(value, (int, float)):

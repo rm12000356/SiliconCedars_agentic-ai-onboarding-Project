@@ -5,7 +5,6 @@ from typing import Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
-from pydantic import ValidationError
 
 from state.state import SupervisorState, TaskRecord, SpecialistResult
 from state.structure_output import SupervisorDecision, ClarificationOutput

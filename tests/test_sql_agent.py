@@ -10,8 +10,9 @@ expect PERMISSION_DENIED, no SQL retry."
 import pytest
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
-from agents.sql_agent import Sql_agent
+from agents.sql_agent import Sql_agent, _extract_chartable_rows
 from state.state import SupervisorState
+from tests.conftest import requires_db, requires_llm
 
 
 def _make_state(task: str) -> SupervisorState:
@@ -45,14 +46,26 @@ def test_general_permission_blocks_sensitive_requests(task):
 
 
 @pytest.mark.integration
-def test_general_permission_does_not_block_nonsensitive_keywords():
-
+@requires_llm
+@requires_db
+def test_general_permission_synonym_is_denied():
     state = _make_state("What is the compensation for Rami Noueihed?")
     result = Sql_agent(state, _config("general"))
 
     specialist_result = result["last_result"]
 
     assert specialist_result.issue == "permission_denied"
+
+
+def test_chartable_rows_reject_booleans():
+    assert _extract_chartable_rows([{"label": "flag", "value": True}]) is None
+    assert _extract_chartable_rows([{"label": "flag", "value": False}]) is None
+
+
+def test_chartable_rows_accept_numbers():
+    assert _extract_chartable_rows([{"label": "x", "value": 1.5}]) == [
+        {"label": "x", "value": 1.5}
+    ]
 
 
 def test_sql_agent_raises_on_missing_current_task():

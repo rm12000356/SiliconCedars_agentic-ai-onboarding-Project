@@ -18,7 +18,7 @@ def run():
         # Stable identities
         user_id = os.getenv("DEFAULT_USER_ID", "test-user-1")
         thread_id = os.getenv("DEFAULT_THREAD_ID", "thread-test-user-1")
-        permission_level = os.getenv("DEFAULT_PERMISSION_LEVEL", "elevated")
+        permission_level = os.getenv("DEFAULT_PERMISSION_LEVEL", "general")
 
         config: RunnableConfig = {
             "configurable": {

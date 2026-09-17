@@ -50,6 +50,7 @@ def _state(
     current_task: str | None = None,
     task_history: list[TaskRecord] | None = None,
     turn_count: int = 1,
+    clarification_count: int = 0,
     messages=None,
 ) -> SupervisorState:
     return SupervisorState(
@@ -58,6 +59,7 @@ def _state(
         current_task=current_task,
         task_history=task_history or [],
         turn_count=turn_count,
+        clarification_count=clarification_count,
     )
 
 
@@ -226,21 +228,18 @@ def test_refuse_reroute_to_just_finished_specialist():
     assert guarded.next == "end"
 
 
-def test_second_clarification_in_same_turn_ends():
-    history = [
-        TaskRecord.model_construct(
-            turn=1,
-            route="clarification",
-            task="please clarify",
-            status="done",
-            result_summary="asked",
-            issue=None,
-        )
-    ]
-    state = _state(text="still unclear", task_history=history)
+def test_first_clarification_in_same_turn_is_allowed():
+    state = _state(text="still unclear", clarification_count=0)
+    decision = SupervisorDecision(next="clarification", current_task="ask once")
+    guarded = post_decision_guards(state, decision, [])
+    assert guarded.next == "clarification"
+
+
+def test_clarification_cap_routes_to_convo():
+    state = _state(text="still unclear", clarification_count=1)
     decision = SupervisorDecision(next="clarification", current_task="ask again")
-    guarded = post_decision_guards(state, decision, history)
-    assert guarded.next == "end"
+    guarded = post_decision_guards(state, decision, [])
+    assert guarded.next == "convo"
 
 
 def test_duplicate_completed_task_blocked():

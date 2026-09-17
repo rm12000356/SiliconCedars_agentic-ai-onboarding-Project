@@ -100,7 +100,7 @@ def Sub_controler(state: SubGraphSupervisorState) -> dict:
         return {"next": "report"}
 
     if state.research_attempts >= 1 and _has_substantial_note(state.research_messages):
-        print("[SUB-SUPERVISOR] substantial research note already present → forcing report")
+        print("[SUB-SUPERVISOR] substantial research note already present -> forcing report")
         return {"next": "report"}
 
     model = llm().with_structured_output(SubDecision)

@@ -169,9 +169,9 @@ def Research(state: SubGraphSupervisorState) -> dict:
 
         # Soft early-exit: we already have a search + enough pages
         if search_attempts >= MAX_SEARCH_ATTEMPTS and fetch_attempts >= 2:
-            print("[RESEARCH] enough material gathered → forcing final note")
+            print("[RESEARCH] enough material gathered -> forcing final note")
             return _final_note(messages)
 
     # Hard stop
-    print("[RESEARCH] max iterations reached → forcing final note")
+    print("[RESEARCH] max iterations reached -> forcing final note")
     return _final_note(messages)
