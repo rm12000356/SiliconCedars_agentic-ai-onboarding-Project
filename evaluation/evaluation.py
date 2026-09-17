@@ -19,12 +19,16 @@ Two evaluations, matching two different concerns:
 
 from functools import partial
 
+import logging
+
 from langchain_core.messages import HumanMessage
 from langsmith import Client
 from langsmith.evaluation import evaluate
 
 from state.state import SupervisorState
 from agents.rag_agent import RAG
+
+logger = logging.getLogger(__name__)
 
 client = Client()
 
@@ -145,7 +149,7 @@ def run_routing_evaluation(dataset_name: str, graph, name_llm: str | None = None
         ],
         experiment_prefix="routing-eval",
     )
-    print(results)
+    logger.info("%s", results)
     return results
 
 
@@ -245,5 +249,5 @@ def run_rag_evaluation(dataset_name: str, name_llm: str | None = None):
         ],
         experiment_prefix="rag-eval",
     )
-    print(results)
+    logger.info("%s", results)
     return results

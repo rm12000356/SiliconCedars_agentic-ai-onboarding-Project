@@ -1,3 +1,4 @@
+import logging
 import math
 import os
 from pathlib import Path
@@ -15,6 +16,8 @@ from langchain_core.messages import HumanMessage
 from services.message_utils import latest_user_request
 
 OUTPUT_DIR = Path("outputs")
+
+logger = logging.getLogger(__name__)
 
 CHART_EXTRACTION_PROMPT = """
 Extract a chart specification from the user's request.
@@ -46,7 +49,7 @@ def Visualization(state: SupervisorState) -> dict:
             "missing_current_task",
         )
 
-    print(f"[VISU] current_task={state.current_task!r}")
+    logger.debug("[VISU] current_task=%r", state.current_task)
 
     try:
 
@@ -54,9 +57,9 @@ def Visualization(state: SupervisorState) -> dict:
             state.last_result is not None
             and state.last_result.structured_data
         ):
-            print(
-                "[VISU] using structured_data from "
-                f"{state.last_result.source}"
+            logger.debug(
+                "[VISU] using structured_data from %s",
+                state.last_result.source,
             )
 
             spec = _extract_structured_rows(
@@ -75,7 +78,7 @@ def Visualization(state: SupervisorState) -> dict:
             )
 
         else:
-            print("[VISU] no structured_data, using LLM extraction")
+            logger.debug("[VISU] no structured_data, using LLM extraction")
 
             spec = _extract_from_task(state.current_task)
 
@@ -83,12 +86,12 @@ def Visualization(state: SupervisorState) -> dict:
 
         _validate_spec(spec)
 
-        print(f"[VISU] chart_spec={spec!r}")
+        logger.debug("[VISU] chart_spec=%r", spec)
 
 
         filepath = _render_chart(spec)
 
-        print(f"[VISU] saved chart to {filepath}")
+        logger.debug("[VISU] saved chart to %s", filepath)
 
         return {
             "last_result": SpecialistResult(
@@ -102,7 +105,7 @@ def Visualization(state: SupervisorState) -> dict:
         }
 
     except ValueError as exc:
-        print(f"[VISU] validation failure: {exc}")
+        logger.warning("[VISU] validation failure: %s", exc)
 
         return _failed_result(
             "The visualization request did not contain valid chart data.",
@@ -110,7 +113,7 @@ def Visualization(state: SupervisorState) -> dict:
         )
 
     except Exception as exc:
-        print(f"[VISU] rendering/extraction failure: {exc}")
+        logger.warning("[VISU] rendering/extraction failure: %s", exc)
 
         return _failed_result(
             "The visualization could not be generated.",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Callable
 
@@ -9,6 +10,8 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 PRIMARY_MODEL = "openai/gpt-oss-120b"
 
@@ -99,19 +102,28 @@ class ResilientLLM:
             try:
                 client = self._build(factory)
             except Exception as e:
-                print(f"[LLM] {label} unavailable while constructing client: {type(e).__name__}: {e}")
+                logger.warning(
+                    "[LLM] %s unavailable while constructing client: %s: %s",
+                    label, type(e).__name__, e,
+                )
                 last_exc = e
                 continue
 
             try:
-                print(f"[LLM] Trying {label}")
+                logger.info("[LLM] Trying %s", label)
                 return client.invoke(*args, **kwargs)
             except Exception as e:
                 last_exc = e
                 if _is_retryable(e):
-                    print(f"[LLM] {label} failed ({type(e).__name__}: {e}) -> trying next model")
+                    logger.warning(
+                        "[LLM] %s failed (%s: %s) -> trying next model",
+                        label, type(e).__name__, e,
+                    )
                     continue
-                print(f"[LLM] {label} failed with non-retryable error: {type(e).__name__}: {e}")
+                logger.error(
+                    "[LLM] %s failed with non-retryable error: %s: %s",
+                    label, type(e).__name__, e,
+                )
                 raise
 
         raise RuntimeError(

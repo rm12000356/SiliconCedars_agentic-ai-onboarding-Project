@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from typing import Any, Optional, cast
 import atexit
@@ -11,8 +12,12 @@ from langchain_core.runnables import RunnableConfig
 from services.memory import get_checkpointer
 from graph.workflow import Main_WorkFlow, has_pending_interrupt
 from services.auth import authenticate
+from services.logging_config import configure_logging
 
 load_dotenv()
+configure_logging()
+
+logger = logging.getLogger(__name__)
 
 @cl.password_auth_callback
 async def auth_callback(username: str, password: str) -> Optional[cl.User]:
@@ -45,8 +50,11 @@ def get_data_layer():
 memory, memory_context = get_checkpointer()
 graph = Main_WorkFlow(memory)
 
-print("GRAPH:", type(graph))
-print("CHECKPOINTER:", getattr(graph, "checkpointer", "NO CHECKPOINTER ATTRIBUTE"))
+logger.info("GRAPH: %s", type(graph))
+logger.info(
+    "CHECKPOINTER: %s",
+    getattr(graph, "checkpointer", "NO CHECKPOINTER ATTRIBUTE"),
+)
 
 
 def close_memory(

@@ -1,7 +1,11 @@
+import logging
+
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from state.structure_output import ReportOutput
 from state.state import SubGraphSupervisorState
 from services.llm import llm
+
+logger = logging.getLogger(__name__)
 
 REPORT_PROMPT = """You are the final report writer for a research task.
 
@@ -21,10 +25,10 @@ was found, say so plainly here even if the report text itself is written diploma
 
 
 def Report_W(state: SubGraphSupervisorState) -> dict:
-    print(f"[REPORT] task={state.task!r}")
-    print(f"[REPORT] {len(state.research_messages)} messages received")
+    logger.debug("[REPORT] task=%r", state.task)
+    logger.debug("[REPORT] %s messages received", len(state.research_messages))
     if not state.research_messages:
-        print("[REPORT] no messages at all, nothing to report on")
+        logger.debug("[REPORT] no messages at all, nothing to report on")
         return {
             "research_messages": [AIMessage(content="No research material was available.")],
             "research_succeeded": False,
@@ -35,7 +39,7 @@ def Report_W(state: SubGraphSupervisorState) -> dict:
     research_material = "\n\n".join(
         _content_to_str(m.content) for m in state.research_messages
     )
-    print(f"[REPORT] research_material={research_material[:500]!r}")
+    logger.debug("[REPORT] research_material=%r", research_material[:500])
 
     model = llm().with_structured_output(ReportOutput)
     result = model.invoke([
@@ -45,7 +49,7 @@ def Report_W(state: SubGraphSupervisorState) -> dict:
     if not isinstance(result, ReportOutput):
         result = ReportOutput.model_validate(result)
 
-    print(f"[REPORT] success={result.success} final report: {result.content[:500]!r}")
+    logger.debug("[REPORT] success=%s final report: %r", result.success, result.content[:500])
 
     return {
         "research_messages": [AIMessage(content=result.content)],

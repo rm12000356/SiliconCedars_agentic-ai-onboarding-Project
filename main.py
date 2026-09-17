@@ -7,10 +7,11 @@ from evaluation.evaluation import run_routing_evaluation, run_rag_evaluation
 from graph.workflow import Main_WorkFlow
 from agents.clarification import resume_clarification
 from services.memory import get_checkpointer
+from services.logging_config import configure_logging
 
 
 def run():
-    
+    configure_logging()
     memory , memory_context = get_checkpointer()
     try:
         graph = Main_WorkFlow(memory)

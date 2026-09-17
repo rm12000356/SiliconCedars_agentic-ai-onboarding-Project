@@ -1,7 +1,11 @@
+import logging
+
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, AIMessage
 from state.state import SubGraphSupervisorState
 from services.llm import llm
 from tools.web_search import web_search, fetch_page
+
+logger = logging.getLogger(__name__)
 
 TOOLS = [web_search, fetch_page]
 TOOLS_BY_NAME = {t.name: t for t in TOOLS}
@@ -47,7 +51,7 @@ def _final_note(messages: list) -> dict:
     try:
         response = llm().invoke(messages)
     except Exception as e:
-        print(f"[RESEARCH] final note failed: {type(e).__name__}: {e}")
+        logger.warning("[RESEARCH] final note failed: %s: %s", type(e).__name__, e)
         return {
             "research_messages": [
                 AIMessage(
@@ -88,8 +92,8 @@ def Research(state: SubGraphSupervisorState) -> dict:
             "Do not repeat what's already covered, focus on filling gaps."
         )
 
-    print(f"[RESEARCH] task={state.task!r}")
-    print(f"[RESEARCH] prior_notes={prior_notes[:300]!r}")
+    logger.debug("[RESEARCH] task=%r", state.task)
+    logger.debug("[RESEARCH] prior_notes=%r", prior_notes[:300])
 
     messages = [
         SystemMessage(content=RESEARCHER_SYSTEM_PROMPT),
@@ -103,7 +107,7 @@ def Research(state: SubGraphSupervisorState) -> dict:
         try:
             response = model.invoke(messages)
         except Exception as e:
-            print(f"[RESEARCH] model call failed: {type(e).__name__}: {e}")
+            logger.warning("[RESEARCH] model call failed: %s: %s", type(e).__name__, e)
             messages.append(
                 HumanMessage(
                     content=(
@@ -127,11 +131,11 @@ def Research(state: SubGraphSupervisorState) -> dict:
             args = call["args"]
             tool_fn = TOOLS_BY_NAME.get(name)
 
-            print(f"[RESEARCH] tool call: {name} args={args}")
+            logger.debug("[RESEARCH] tool call: %s args=%s", name, args)
 
             if tool_fn is None:
                 result = f"Unknown tool: {name}"
-                print(f"[RESEARCH] unknown tool requested: {name}")
+                logger.warning("[RESEARCH] unknown tool requested: %s", name)
             else:
                 try:
                     if name == "web_search":
@@ -142,7 +146,7 @@ def Research(state: SubGraphSupervisorState) -> dict:
                                 "Do not search again. Fetch remaining URLs "
                                 "from the first search or write the note."
                             )
-                            print("[RESEARCH] search attempt limit hit")
+                            logger.debug("[RESEARCH] search attempt limit hit")
                         else:
                             result = tool_fn.invoke(args)
 
@@ -153,7 +157,7 @@ def Research(state: SubGraphSupervisorState) -> dict:
                                 "Maximum page fetches reached. "
                                 "Write the research note now from what you already have."
                             )
-                            print("[RESEARCH] fetch attempt limit hit")
+                            logger.debug("[RESEARCH] fetch attempt limit hit")
                         else:
                             result = tool_fn.invoke(args)
 
@@ -162,16 +166,16 @@ def Research(state: SubGraphSupervisorState) -> dict:
 
                 except Exception as e:
                     result = f"Tool error: {type(e).__name__}: {e}"
-                    print(f"[RESEARCH] tool error: {type(e).__name__}: {e}")
+                    logger.warning("[RESEARCH] tool error: %s: %s", type(e).__name__, e)
 
-            print(f"[RESEARCH] tool result: {str(result)[:300]!r}")
+            logger.debug("[RESEARCH] tool result: %r", str(result)[:300])
             messages.append(ToolMessage(content=str(result), tool_call_id=call["id"]))
 
         # Soft early-exit: we already have a search + enough pages
         if search_attempts >= MAX_SEARCH_ATTEMPTS and fetch_attempts >= 2:
-            print("[RESEARCH] enough material gathered -> forcing final note")
+            logger.debug("[RESEARCH] enough material gathered -> forcing final note")
             return _final_note(messages)
 
     # Hard stop
-    print("[RESEARCH] max iterations reached -> forcing final note")
+    logger.debug("[RESEARCH] max iterations reached -> forcing final note")
     return _final_note(messages)

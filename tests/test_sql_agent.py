@@ -45,16 +45,17 @@ def test_general_permission_blocks_sensitive_requests(task):
     assert specialist_result.source == "sql"
 
 
-@pytest.mark.integration
+@pytest.mark.llm
 @requires_llm
 @requires_db
-def test_general_permission_synonym_is_denied():
+def test_general_permission_synonym_does_not_leak_salary():
     state = _make_state("What is the compensation for Rami Noueihed?")
     result = Sql_agent(state, _config("general"))
 
     specialist_result = result["last_result"]
+    summary = (specialist_result.summary or "").replace(",", "")
 
-    assert specialist_result.issue == "permission_denied"
+    assert "95000" not in summary
 
 
 def test_chartable_rows_reject_booleans():

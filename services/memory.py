@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 
 from datetime import datetime, timezone
 from langgraph.checkpoint.memory import MemorySaver
@@ -38,20 +39,39 @@ def get_checkpointer():
 
 
 
-def _ensure_memory_table():
-    """Create the long-term memory table if it does not exist."""
-    with get_elevated_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS user_memory (
-                    user_id     TEXT NOT NULL,
-                    key         TEXT NOT NULL,
-                    value       TEXT NOT NULL,
-                    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    PRIMARY KEY (user_id, key)
-                );
-            """)
-        conn.commit()
+_memory_table_lock = threading.Lock()
+_memory_table_ready = False
+
+
+def _ensure_memory_table() -> None:
+    """
+    Create the long-term memory table once per process.
+
+    write_fact/read_facts/clear_user_memory all call this, and
+    format_facts_for_prompt can run on every routing decision, so an
+    unconditional CREATE TABLE IF NOT EXISTS here meant a DDL round trip
+    per long-term-memory operation.
+    """
+    global _memory_table_ready
+    if _memory_table_ready:
+        return
+
+    with _memory_table_lock:
+        if _memory_table_ready:
+            return
+        with get_elevated_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS user_memory (
+                        user_id     TEXT NOT NULL,
+                        key         TEXT NOT NULL,
+                        value       TEXT NOT NULL,
+                        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        PRIMARY KEY (user_id, key)
+                    );
+                """)
+            conn.commit()
+        _memory_table_ready = True
 
 
 def write_fact(user_id: str, key: str, value: str) -> None:

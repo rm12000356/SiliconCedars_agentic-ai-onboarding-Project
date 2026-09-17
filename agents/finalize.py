@@ -1,9 +1,13 @@
+import logging
+
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from state.state import FactExtraction
 from state.state import SupervisorState
 from services.llm import llm
 from services.memory import write_fact
+
+logger = logging.getLogger(__name__)
 
 IDENTITY_HINTS = [
     "my name is", "i'm ", "i am ", "call me", "i prefer", "i like",
@@ -88,11 +92,14 @@ def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
 
             for fact in extraction.facts:
                 write_fact(user_id, fact.key, fact.value)
-                print(f"[MEMORY] wrote fact for user {user_id}: {fact.key}={fact.value}")
+                logger.info(
+                    "[MEMORY] wrote fact for user %s: %s=%s",
+                    user_id, fact.key, fact.value,
+                )
         except Exception as e:
             # Long-term memory is a nice-to-have, not a hard dependency.
             # A failed extraction should never break finishing the turn.
-            print(f"[MEMORY] fact extraction failed, skipping: {e}")
+            logger.warning("[MEMORY] fact extraction failed, skipping: %s", e)
 
     if "messages" not in update and not _turn_has_assistant_output(state.messages):
         update["messages"] = [AIMessage(content=NO_ANSWER_FALLBACK)]

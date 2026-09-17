@@ -1,3 +1,5 @@
+import logging
+
 from langchain_core.messages import HumanMessage, ToolMessage, SystemMessage, AIMessage
 from langchain_core.runnables import RunnableConfig
 from state.state import SupervisorState, SpecialistResult
@@ -5,6 +7,8 @@ from services.llm import llm
 from tools.database import GENERAL_TOOLS, ELEVATED_TOOLS
 from decimal import Decimal
 from groq import BadRequestError
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_chartable_rows(tool_output) -> list[dict] | None:
@@ -50,8 +54,8 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
         raise RuntimeError("Missing runtime configuration")
 
     permission_level = configurable.get("permission_level", "general")
-    print(f"[SQL] permission_level={permission_level!r}")
-    print(f"[SQL] current_task={state.current_task!r}")
+    logger.debug("[SQL] permission_level=%r", permission_level)
+    logger.debug("[SQL] current_task=%r", state.current_task)
 
     task_lower = state.current_task.lower()
     sensitive = any(k in task_lower for k in ["salary", "salaries", "credential", "password"])
@@ -68,7 +72,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
 
     tools = GENERAL_TOOLS + ELEVATED_TOOLS if permission_level == "elevated" else GENERAL_TOOLS
     tools_by_name = {t.name: t for t in tools}
-    print(f"[SQL] bound tools={list(tools_by_name.keys())}")
+    logger.debug("[SQL] bound tools=%s", list(tools_by_name.keys()))
 
     model = llm().bind_tools(tools)
 
@@ -98,7 +102,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
     collected_facts = []          # simple list of what the tools returned
 
     for i in range(max_iterations):
-        print(f"[SQL] iteration {i + 1}/{max_iterations}")
+        logger.debug("[SQL] iteration %s/%s", i + 1, max_iterations)
         try:
             response = model.invoke(messages)
         except BadRequestError:
@@ -113,7 +117,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
         messages.append(response)
 
         if not response.tool_calls:
-            print(f"[SQL] final answer: {response.content!r}")
+            logger.debug("[SQL] final answer: %r", response.content)
             final_text = str(response.content)
             if not final_text.strip():
                 return {
@@ -133,7 +137,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
             }
 
         for call in response.tool_calls:
-            print(f"[SQL] tool call: {call['name']} args={call['args']}")
+            logger.debug("[SQL] tool call: %s args=%s", call["name"], call["args"])
             tool_fn = tools_by_name.get(call["name"])
 
             if tool_fn is None:
@@ -150,7 +154,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
                 tool_output = tool_fn.invoke(call["args"])
             except Exception as e:
                 err = str(e).lower()
-                print(f"[SQL] tool error: {type(e).__name__}: {e}")
+                logger.warning("[SQL] tool error: %s: %s", type(e).__name__, e)
                 if any(x in err for x in ["does not exist", "undefined table", "undefined column"]):
                     return {
                         "last_result": SpecialistResult(
@@ -163,7 +167,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
                 tool_output = f"Tool execution error: {type(e).__name__}: {e}"
 
             clean_output = _serialize(tool_output)
-            print(f"[SQL] tool result: {str(clean_output)[:300]}")
+            logger.debug("[SQL] tool result: %s", str(clean_output)[:300])
 
             # Keep a simple record of what we learned
             collected_facts.append(f"{call['name']}({call['args']}) → {clean_output}")
@@ -171,7 +175,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
             detected = _extract_chartable_rows(clean_output)
             if detected:
                 last_chartable_rows = detected
-                print(f"[SQL] detected chartable rows: {detected}")
+                logger.debug("[SQL] detected chartable rows: %s", detected)
 
             messages.append(
                 ToolMessage(content=str(clean_output), tool_call_id=call["id"])
@@ -182,7 +186,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
     # Synthesize a final answer instead of returning failed.
     # ---------------------------------------------------------------
     if collected_facts:
-        print("[SQL] max iterations reached, synthesizing answer from collected facts")
+        logger.info("[SQL] max iterations reached, synthesizing answer from collected facts")
         synthesis_prompt = [
             SystemMessage(content=(
                 "You are a helpful assistant. Below are the exact results returned by database tools. "

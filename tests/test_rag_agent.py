@@ -5,6 +5,7 @@ from tests.conftest import requires_db, requires_llm
 
 
 @pytest.mark.integration
+@pytest.mark.llm
 @requires_llm
 @requires_db
 def test_rag_finds_real_match():
@@ -23,6 +24,7 @@ def test_rag_finds_real_match():
 
 
 @pytest.mark.integration
+@pytest.mark.llm
 @requires_llm
 @requires_db
 def test_rag_reports_no_match_honestly():

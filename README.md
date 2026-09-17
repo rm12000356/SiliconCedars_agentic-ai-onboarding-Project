@@ -113,6 +113,12 @@ DEFAULT_USER_ID=test-user-1
 DEFAULT_THREAD_ID=thread-test-user-1
 DEFAULT_PERMISSION_LEVEL=general    # "general" or "elevated"
 CHECKPOINT_BACKEND=memory            # "memory" or "postgres"
+LOG_LEVEL=INFO                       # DEBUG, INFO, WARNING, ERROR
+DB_POOL_MIN_SIZE=1
+DB_POOL_MAX_SIZE_GENERAL=5
+DB_POOL_MAX_SIZE_ELEVATED=3
+DB_POOL_ACQUIRE_TIMEOUT=30
+DB_CONNECT_TIMEOUT=5
 ```
 
 Use `general` unless you are explicitly testing salary or credential paths.
