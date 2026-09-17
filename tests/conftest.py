@@ -20,7 +20,7 @@ def _db_reachable() -> bool:
     try:
         from db.connection import get_general_connection
 
-        with get_general_connection(connect_timeout=2) as conn:
+        with get_general_connection(acquire_timeout=2) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
                 cur.fetchone()

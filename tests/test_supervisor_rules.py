@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal, cast
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from agents.supervisor import (
     MAX_HOPS_PER_TURN,
@@ -22,6 +22,7 @@ from agents.supervisor import (
 )
 from state.state import SpecialistResult, SupervisorState, TaskRecord
 from state.structure_output import SupervisorDecision
+from services.message_utils import CLARIFICATION_ANSWER_FLAG
 
 
 def _record(
@@ -205,6 +206,22 @@ def test_user_wants_visualization_multimodal_content():
         messages=[HumanMessage(content=[{"type": "text", "text": "Please visualize this"}])],
         turn_count=1,
     )
+    assert _user_wants_visualization(state)
+
+
+def test_user_wants_visualization_from_clarification_answer():
+    state = SupervisorState(
+        messages=[
+            HumanMessage(content="show me the sales numbers"),
+            AIMessage(content="Which view would you like?"),
+            HumanMessage(
+                content="as a pie chart",
+                additional_kwargs={CLARIFICATION_ANSWER_FLAG: True},
+            ),
+        ],
+        turn_count=1,
+    )
+
     assert _user_wants_visualization(state)
 
 

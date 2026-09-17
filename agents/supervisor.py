@@ -8,7 +8,7 @@ from langchain_core.runnables import RunnableConfig
 
 from state.state import SupervisorState, TaskRecord, SpecialistResult
 from state.structure_output import SupervisorDecision, ClarificationOutput
-from services.message_utils import latest_user_request
+from services.message_utils import clarification_answers, latest_user_request
 from services.llm import llm
 from services.memory import format_facts_for_prompt
 from services.errors import classify_llm_error
@@ -237,15 +237,20 @@ def deterministic_decision(
 
 
 def _user_wants_visualization(state: SupervisorState) -> bool:
-    """Very lightweight intent check — only looks at the latest human message."""
+    """
+    Lightweight chart-intent check.
+
+    Looks at the latest request plus any clarification answers, so an answer
+    like "as a pie chart" still counts even though latest_user_request
+    deliberately skips tagged clarification answers.
+    """
     if not state.messages:
         return False
 
-    request = latest_user_request(state.messages)
-    if not request:
+    parts = [latest_user_request(state.messages), *clarification_answers(state.messages)]
+    text = " ".join(part for part in parts if part).lower()
+    if not text:
         return False
-
-    text = request.lower()
 
     keywords = ["chart", "graph", "plot", "visualize", "visualise", "bar", "pie", "line chart"]
     return any(k in text for k in keywords)

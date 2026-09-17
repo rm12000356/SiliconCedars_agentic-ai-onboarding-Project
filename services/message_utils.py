@@ -28,6 +28,17 @@ def is_clarification_answer(message) -> bool:
     return bool(extra.get(CLARIFICATION_ANSWER_FLAG))
 
 
+def clarification_answers(messages) -> list[str]:
+    """Text of HumanMessages flagged as clarification answers, chronological."""
+    answers: list[str] = []
+    for message in messages or []:
+        if isinstance(message, HumanMessage) and is_clarification_answer(message):
+            text = " ".join(content_to_text(message.content).split())
+            if text:
+                answers.append(text)
+    return answers
+
+
 def latest_user_request(messages) -> Optional[str]:
    
     fallback: Optional[str] = None

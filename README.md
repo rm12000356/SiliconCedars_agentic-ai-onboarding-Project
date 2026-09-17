@@ -30,6 +30,8 @@ The LLM is only consulted for genuinely novel routing decisions.
   * `llm.py`: Groq with OpenRouter fallback
   * `memory.py`: Checkpointer and long-term user memory
   * `errors.py`: Authentication vs. transient LLM error classification
+  * `chart_storage.py`: Local storage client and authenticated chart serving
+  * `logging_config.py`: LOG_LEVEL-driven logging setup
 
 * `evaluation/`
   LangSmith evaluation for routing via `task_history`, RAG grounding, and correctness.
@@ -283,8 +285,11 @@ LLM-as-judge correctness is used only when a reference answer exists.
 * **CLI has no real authentication**
   The `main.py` CLI reads `user_id` and `permission_level` from its configuration rather than a verified identity. The Chainlit entry point (`chat.py`) authenticates against `app_users` with bcrypt and derives `permission_level` from the logged-in user.
 
-* **Charts are file-only**
-  Visualization writes a PNG under `outputs/` and returns the path in the reply; the Chainlit UI does not yet render the image.
+* **Charts in the web UI**
+  The Chainlit entry point renders the generated PNG inline (`cl.Image`). Element
+  files are persisted by a local storage client and served through an
+  authenticated `/charts/<token>` route, so charts survive a page refresh. The
+  `main.py` CLI prints the file path only.
 
 * **No cross-turn data chaining**
   Requests such as `"chart that"` after a previous `Finalize` are not supported. Same-turn SQL → visualization is supported.

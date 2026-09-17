@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from state.state import SupervisorState, SpecialistResult, ChartSpec
 from services.llm import llm
 from langchain_core.messages import HumanMessage
-from services.message_utils import latest_user_request
+from services.message_utils import clarification_answers, latest_user_request
 
 OUTPUT_DIR = Path("outputs")
 
@@ -66,14 +66,10 @@ def Visualization(state: SupervisorState) -> dict:
                 state.last_result.structured_data
             )
 
-            user_request = latest_user_request(state.messages)
-
             spec = spec.model_copy(
                 update={
                     "title": _title_from_user_request(state),
-                    "chart_type": _chart_type_from_task(
-                        user_request or state.current_task
-                    ),
+                    "chart_type": _resolve_chart_type(state),
                 }
             )
 
@@ -324,19 +320,49 @@ def _title_from_user_request(state: SupervisorState) -> str:
     return _title_from_task(state.current_task or "Chart")
 
 
+def _explicit_chart_type(text: str) -> Literal["bar", "line", "pie"] | None:
+    """
+    Explicit chart type stated in text, or None when nothing is named.
+
+    Returning None (rather than defaulting to bar) lets _resolve_chart_type
+    try several sources in precedence order before falling back.
+    """
+    lowered = (text or "").lower()
+
+    if "pie chart" in lowered or "pie graph" in lowered:
+        return "pie"
+
+    if "line chart" in lowered or "line graph" in lowered:
+        return "line"
+
+    return None
+
+
 def _chart_type_from_task(task: str) -> Literal["bar", "line", "pie"]:
     """
     Deterministic chart-type selection for structured specialist data.
 
     Explicit user intent wins. Bar is the safe default.
     """
+    return _explicit_chart_type(task) or "bar"
 
-    text = task.lower()
 
-    if "pie chart" in text or "pie graph" in text:
-        return "pie"
+def _resolve_chart_type(state: SupervisorState) -> Literal["bar", "line", "pie"]:
+    """
+    Resolve the chart type from the most specific intent source available.
 
-    if "line chart" in text or "line graph" in text:
-        return "line"
+    Precedence: the most recent clarification answer first (it is the user's
+    latest, refined intent), then the original request, then the Supervisor's
+    internal task. latest_user_request deliberately skips clarification
+    answers, so without this an answer like "pie chart" was silently ignored.
+    """
+    sources: list[str | None] = list(reversed(clarification_answers(state.messages)))
+    sources.append(latest_user_request(state.messages))
+    sources.append(state.current_task)
+
+    for text in sources:
+        explicit = _explicit_chart_type(text or "")
+        if explicit:
+            return explicit
 
     return "bar"

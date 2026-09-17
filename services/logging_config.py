@@ -18,6 +18,8 @@ def configure_logging() -> None:
     UnicodeEncodeError while emitting log lines.
     """
     level = os.getenv("LOG_LEVEL", "INFO").upper()
+    if level not in logging.getLevelNamesMapping():
+        level = "INFO"
     root = logging.getLogger()
     if root.handlers:
         root.setLevel(level)

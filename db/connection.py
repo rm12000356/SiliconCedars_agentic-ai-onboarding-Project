@@ -1,3 +1,12 @@
+"""
+Database connections for the app's two access tiers.
+
+Both get_general_connection() and get_elevated_connection() return a context
+manager (they hand out pooled connections), so callers must use
+``with get_*_connection() as conn:``. External direct-style scripts that expect
+a bare psycopg connection need to adapt.
+"""
+
 import atexit
 import os
 import threading
@@ -85,7 +94,7 @@ def _get_elevated_pool() -> ConnectionPool:
     return _elevated_pool
 
 
-def get_general_connection(connect_timeout: int | None = None):
+def get_general_connection(acquire_timeout: int | None = None):
     """
     Connection for the free-form SQL agent path. Uses general_role,
     which has SELECT only on non-sensitive tables. Sensitive tables
@@ -94,14 +103,14 @@ def get_general_connection(connect_timeout: int | None = None):
     Returns a pooled connection context manager: on exit the connection
     is returned to the pool instead of being closed and re-established.
 
-    `connect_timeout` bounds how long to wait for a pooled connection
+    `acquire_timeout` bounds how long to wait for a pooled connection
     (used by short-lived reachability probes). The underlying PostgreSQL
     connect attempt is bounded separately by DB_CONNECT_TIMEOUT.
     """
     pool = _get_general_pool()
-    if connect_timeout is None:
+    if acquire_timeout is None:
         return pool.connection()
-    return pool.connection(timeout=connect_timeout)
+    return pool.connection(timeout=acquire_timeout)
 
 
 def get_elevated_connection():
