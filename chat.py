@@ -1,3 +1,4 @@
+import asyncio
 import os
 from typing import Any, Optional, cast
 import atexit
@@ -8,7 +9,7 @@ from langgraph.types import Command
 from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
 from langchain_core.runnables import RunnableConfig
 from services.memory import get_checkpointer
-from graph.workflow import Main_WorkFlow
+from graph.workflow import Main_WorkFlow, has_pending_interrupt
 from services.auth import authenticate
 
 load_dotenv()
@@ -63,14 +64,26 @@ atexit.register(close_memory, None, None, None)
 
 @cl.on_chat_start
 async def start():
-    cl.user_session.set("awaiting_clarification", False)
-
     app_user = cl.user_session.get("user")
     if app_user:
         role = (app_user.metadata or {}).get("role", "user")
         await cl.Message(
             content=f"Welcome, **{app_user.identifier}** ({role}). How can I help you today?"
         ).send()
+
+
+@cl.on_chat_resume
+async def on_chat_resume(thread):
+    """
+    Chainlit only resumes a persisted thread when this hook is registered.
+    Without it a browser refresh leaves the UI on the thread preview with no
+    composer. Chainlit replays persisted messages/elements and restores the
+    user session automatically; nothing else is required here. Do not send
+    messages in this hook (known Chainlit issues #2338 / #2611 make them
+    vanish). The LangGraph graph is keyed by cl.context.session.thread_id,
+    which is the resumed thread's id, so its checkpoint is reused.
+    """
+    pass
 
 
 @cl.on_message
@@ -97,35 +110,29 @@ async def main(message: cl.Message):
         }
     }
 
-    awaiting_clarification = cl.user_session.get("awaiting_clarification")
+    # ---------------------------------------------------------
+    # RESUME A PAUSED GRAPH (source of truth is the checkpoint)
+    # ---------------------------------------------------------
+    try:
+        snapshot = await asyncio.to_thread(graph.get_state, config)
+        paused = has_pending_interrupt(snapshot)
+    except Exception:
+        paused = False
 
-    # ---------------------------------------------------------
-    # RESUME A PAUSED GRAPH
-    # ---------------------------------------------------------
-    if awaiting_clarification:
-        result = graph.invoke(
-            Command(resume=message.content),
-            config=config,
+    if paused:
+        result = await asyncio.to_thread(
+            graph.invoke, Command(resume=message.content), config
         )
-        cl.user_session.set("awaiting_clarification", False)
-
-
     else:
-        result = graph.invoke(
-            cast(
-                Any,
-                {
-                    "messages": [HumanMessage(content=message.content)]
-                },
-            ),
-            config=config,
+        result = await asyncio.to_thread(
+            graph.invoke,
+            cast(Any, {"messages": [HumanMessage(content=message.content)]}),
+            config,
         )
 
     interrupts = result.get("__interrupt__")
 
     if interrupts:
-        cl.user_session.set("awaiting_clarification", True)
-
         interrupt_value = interrupts[0].value
         if isinstance(interrupt_value, dict):
             question = interrupt_value.get(
