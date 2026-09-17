@@ -44,14 +44,8 @@ _memory_table_ready = False
 
 
 def _ensure_memory_table() -> None:
-    """
-    Create the long-term memory table once per process.
-
-    write_fact/read_facts/clear_user_memory all call this, and
-    format_facts_for_prompt can run on every routing decision, so an
-    unconditional CREATE TABLE IF NOT EXISTS here meant a DDL round trip
-    per long-term-memory operation.
-    """
+    """Create the long-term memory table once per process (avoids a DDL
+    round trip on every long-term-memory operation)."""
     global _memory_table_ready
     if _memory_table_ready:
         return

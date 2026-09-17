@@ -1,22 +1,3 @@
-"""
-LangSmith evaluation of the multi-agent system.
-
-Two evaluations, matching two different concerns:
-
-1. Routing evaluation: does the Supervisor send each request to the
-   right specialist? Introspection here uses task_history, not raw
-   message tool_calls, since specialist tool-calling loops (SQL,
-   Research) are local to that node's function call and never surface
-   in the outer graph's messages. task_history is the actual record of
-   which route ran, already checkpointed, already turn-scoped.
-
-2. RAG evaluation: grounded retrieval quality against the real
-   lessons_learned corpus, with an explicit grounding check (did it
-   honestly report no match, rather than an LLM-judge score alone,
-   which wouldn't distinguish "answered correctly" from "confidently
-   made something up").
-"""
-
 from functools import partial
 
 import logging

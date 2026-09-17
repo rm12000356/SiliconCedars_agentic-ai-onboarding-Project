@@ -2,7 +2,6 @@ from psycopg import sql
 from db.connection import get_elevated_connection, get_general_connection
 from langchain.tools import tool
 
-# Static data for the lessons_learned table. This is a fixed, gated tool, so it uses the elevated connection.
 @tool
 def get_salary(employee_id: int) -> dict:
     """
@@ -65,7 +64,6 @@ def run_general_query(query_text: str) -> list[dict]:
             cur.execute(sql.SQL(stripped))
 
             if cur.description is None:
-                # No results to fetch (e.g., for INSERT, UPDATE, DELETE)
                 return []
 
             columns = [desc[0] for desc in cur.description]

@@ -19,12 +19,7 @@ from agents.research.research_node import make_research_node
 
 
 def has_pending_interrupt(snapshot) -> bool:
-    """
-    True if the last checkpoint left an unresolved interrupt (e.g. the
-    Clarification node paused the graph). The web entry point uses this to
-    decide whether an incoming message resumes or starts a new turn; the
-    checkpoint, not a UI session flag, is the source of truth.
-    """
+    """True if the last checkpoint left a pending interrupt (e.g. clarification)."""
     return bool(getattr(snapshot, "interrupts", ()) or ())
 
 
@@ -75,13 +70,8 @@ def Main_WorkFlow(memory = None):
 
 
 
-    graph =builder.compile(checkpointer=memory)
+    graph = builder.compile(checkpointer=memory)
 
-    #png = graph.get_graph().draw_mermaid_png()
-
-    #with open("graph_structure.png", "wb") as f:
-    #    f.write(png)
-        
     return graph
 
 def sub_workflow():

@@ -49,8 +49,6 @@ def _turn_has_assistant_output(messages) -> bool:
 
 
 def _already_delivered(messages, content: str) -> bool:
-
-   
     if not _last_is_ai_message(messages):
         return False
     return str(messages[-1].content).strip() == str(content).strip()
@@ -97,8 +95,6 @@ def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
                     user_id, fact.key, fact.value,
                 )
         except Exception as e:
-            # Long-term memory is a nice-to-have, not a hard dependency.
-            # A failed extraction should never break finishing the turn.
             logger.warning("[MEMORY] fact extraction failed, skipping: %s", e)
 
     if "messages" not in update and not _turn_has_assistant_output(state.messages):

@@ -1,7 +1,7 @@
 import math
 from typing import Annotated, List, Optional
 from typing_extensions import Literal
-from pydantic import BaseModel, Field , field_validator
+from pydantic import BaseModel, Field, field_validator
 from langgraph.graph.message import add_messages
 from langchain_core.messages import AnyMessage
 
@@ -11,7 +11,7 @@ MainRoute = Literal[
     "rag",
     "convo",
     "sql",
-    "research",       
+    "research",
     "visu",
     "clarification",
     "end",
@@ -33,11 +33,8 @@ SubRoute = Literal[
 
 
 class SpecialistResult(BaseModel):
-    """
-    What a specialist hands back to the Supervisor.
-    Deliberately thin: no raw tool metadata, no similarity scores,
-    no query plans. Just enough for the Supervisor to decide what's next.
-    """
+    """What a specialist hands back to the Supervisor: enough to decide the
+    next hop, without raw tool metadata, similarity scores, or query plans."""
     source: SpecialistRoute = Field(description="Which specialist produced this result")
     summary: str = Field(description="The actual answer/content, already synthesized")
     status: Literal["done", "partial", "failed"] = Field(
@@ -45,13 +42,8 @@ class SpecialistResult(BaseModel):
     )
     structured_data: Optional[list[dict]] = Field(
         default=None,
-        description="Exact tabular data (label/value pairs) when the result is "
-                    "inherently chartable, e.g. SQL rows from a GROUP BY query. "
-                    "Kept separate from summary deliberately: summary stays "
-                    "thin, human-readable text; this field exists specifically "
-                    "so a downstream specialist (visu) can consume exact "
-                    "numbers without the LLM retyping them through prose, "
-                    "which was unreliable and needlessly expensive."
+        description="Exact label/value pairs when the result is chartable, so "
+                    "visu can consume real numbers instead of the LLM retyping them."
     )
     issue: Optional[str] = Field(
         default=None,
@@ -59,19 +51,11 @@ class SpecialistResult(BaseModel):
     )
 
 class TaskRecord(BaseModel):
-    """
-    One specialist invocation performed during a user turn.
-
-    The same specialist may legitimately appear multiple times if it was
-    given different tasks. History therefore records the concrete task,
-    not merely the route.
-    """
+    """One specialist invocation during a user turn. Records the concrete task,
+    not just the route, because the same specialist can run twice per turn."""
 
     turn: int = Field(
-        description=(
-            "User-turn number. Derived from the number of HumanMessages "
-            "in the conversation."
-        )
+        description="User-turn number (from the persisted turn counter)."
     )
 
     route: SpecialistRoute = Field(
@@ -99,115 +83,82 @@ class TaskRecord(BaseModel):
 
 class SupervisorState(BaseModel):
     messages: Annotated[List[AnyMessage], add_messages] = Field(
-        description="Full conversation history. Supervisor reads all of it; "
-                    "specialists get a filtered slice via current_task, not this directly."
+        description="Full conversation history; specialists get a filtered slice "
+                    "via current_task, not this directly."
     )
     next: Optional[MainRoute] = Field(
         default=None,
-        description="Single next hop, re-decided by the Supervisor every time it's re-entered."
+        description="Single next hop, re-decided by the Supervisor each time it re-enters."
     )
     current_task: Optional[str] = Field(
         default=None,
-        description="Supervisor's extraction of what the routed specialist actually needs "
-                    "to do, so the specialist doesn't have to parse full message history itself."
+        description="What the routed specialist actually needs to do, so it "
+                    "doesn't have to parse full message history itself."
     )
     last_result: Optional[SpecialistResult] = Field(
         default=None,
-        description="What the most recently executed specialist returned. This is what the "
-                    "Supervisor reacts to when re-deciding (e.g. status=partial -> clarification)."
+        description="Most recent specialist result; what the Supervisor reacts "
+                    "to when re-deciding."
     )
     task_history: List[TaskRecord] = Field(
         default_factory=list,
-        description=(
-            "History of specialist invocations performed in this conversation. "
-            "Tracks what task was done and what result came from it."
-        )
+        description="Specialist invocations so far: the concrete task and its outcome."
     )
     turn_count: int = Field(
         default=0,
-        description=(
-            "turn counter, set exactly once per external graph.invoke() call by memory_manager "
-            "(the graph's entry node)"
-        )
+        description="Incremented once per external graph.invoke(), by memory_manager."
     )
     clarification_question: Optional[str] = Field(
         default=None,
-        description=(
-            "The exact question to put to the human, generated by the Supervisor "
-            "when it routes to 'clarification'. Generated there rather than inside "
-            "the Clarification node because LangGraph replays a node from the top "
-            "when resuming from interrupt(): an LLM call placed before interrupt() "
-            "would run twice and the second result would be discarded."
-        ),
+        description="Question to put to the human. Generated by the Supervisor, "
+                    "not the node, because LangGraph replays a node on resume."
     )
     clarification_count: int = Field(
         default=0,
-        description=(
-            "How many times we have already asked the human to clarify during this "
-            "turn. Reset by memory_manager at the start of each turn. Needed because "
-            "clarification never produces a SpecialistResult, so it is invisible to "
-            "task_history and therefore to every task_history-based hop guard."
-        ),
+        description="Clarifications already asked this turn; reset by memory_manager."
     )
     conversation_summary: Optional[str] = Field(
         default=None,
-        description=(
-            "Rolling summary of pruned older messages. Kept out of `messages` on "
-            "purpose: add_messages appends, so splicing the summary into the thread "
-            "placed a summary of *earlier* turns *after* the recent ones. It is "
-            "injected at the top of the Supervisor prompt instead."
-        ),
+        description="Rolling summary of pruned older messages; injected at the "
+                    "top of the Supervisor prompt."
     )
     chart_path: Optional[str] = Field(
         default=None,
-        description=(
-            "Filesystem path of the most recent chart PNG, if any. Set by the "
-            "Visualization node and consumed by the web entry point to render the "
-            "image. Reset by memory_manager at the start of each turn so a stale "
-            "chart is never re-sent."
-        ),
+        description="Filesystem path of the most recent chart PNG; set by "
+                    "Visualization and reset by memory_manager each turn."
     )
 
 
 class SubGraphSupervisorState(BaseModel):
-    """
-    Private state for the Research subgraph. Only relevant keys cross the
-    boundary into the main graph, not this whole schema.
-    """
+    """Private state for the Research subgraph; only some keys cross into the
+    main graph."""
+
     messages: Annotated[List[AnyMessage], add_messages] = Field(
-        description="global message thread"
-                    "not the full outer conversation."
+        description="Global message thread (not the full outer conversation)."
     )
     research_messages: Annotated[List[AnyMessage], add_messages] = Field(
-        default_factory=list ,
-        description="local message scoped to the research task"
+        default_factory=list,
+        description="Messages scoped to the current research task."
     )
     next: Optional[SubRoute] = Field(
         default=None,
         description="Single next hop within the research subgraph."
     )
     task: str = Field(
-        description="The research task handed down from the main Supervisor's current_task."
+        description="Research task handed down from the Supervisor's current_task."
     )
     research_attempts: int = Field(
         default=0,
-        description="Deterministic count of how many times Research has been "
-                    "invoked for this task."
+        description="Deterministic count of Research invocations for this task."
     )
     research_succeeded: Optional[bool] = Field(
         default=None,
-        description="Set by Report_W as a structural signal, not inferred from "
-                    "the report's tone."
+        description="Set by Report_W as a structural signal, not inferred from tone."
     )
     report_written: bool = Field(
         default=False,
-        description="Set to True by Report_W once it has produced a final "
-                    "report. Sub_controler checks this FIRST, before any other "
-                    "logic, and forces 'end' unconditionally once true. Without "
-                    "this, forcing next='report' after exhausting attempts "
-                    "creates an infinite loop: report always edges back to "
-                    "controler, and controler kept re-forcing 'report' forever "
-                    "since attempts stays >= the ceiling permanently."
+        description="Set by Report_W once a report exists; Sub_controler checks it "
+                    "first and ends, preventing the report/controller infinite loop."
     )
 
 class SubDecision(BaseModel):

@@ -60,16 +60,10 @@ CLARIFICATION_QUESTION_PROMPT = (
 )
 
 def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
-    """
-    1. Record the previous specialist result into task_history (if any).
-    2. Try a deterministic decision.
-    3. Fall back to LLM only when necessary.
-    4. Always apply post-guards.
-    5. Map the final decision into a state update.
-    """
+    """Record the prior result, decide deterministically if possible, then
+    apply post-guards and map the decision into a state update."""
     task_history = list(state.task_history)
 
-    # ----- 1. Record previous work -----
     if state.last_result is not None and state.current_task:
         current_turn = get_current_turn(state)
         task_record = TaskRecord(
@@ -91,7 +85,6 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
             },
         )
 
-    # ----- 2. Deterministic first -----
     decision = deterministic_decision(state, task_history)
 
     if decision is None:
@@ -102,7 +95,6 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
         except Exception as e:
             raise RuntimeError(f"Supervisor LLM call failed: {e}") from e
 
-    # ----- 4. Post-guards (always) -----
     decision = post_decision_guards(state, decision, task_history)
     decision = enforce_task_history_guard(state, decision, task_history)
 
@@ -111,7 +103,6 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
         extra={"next": decision.next, "current_task": decision.current_task},
     )
 
-    # ----- 5. Map to state update -----
     update = map_to_state(decision)
     update["task_history"] = task_history
 
@@ -152,17 +143,14 @@ def deterministic_decision(
     turn_history = [r for r in task_history if r.turn == current_turn]
     lr: Optional[SpecialistResult] = state.last_result
 
-    # Hard hop limit
     if len(turn_history) >= MAX_HOPS_PER_TURN:
         logger.warning(
             "hop_limit_reached",
             extra={"limit": MAX_HOPS_PER_TURN, "turn": current_turn},
         )
         return SupervisorDecision(next="end", current_task="")
-   
-    if lr is not None:
 
-        
+    if lr is not None:
         if (
             lr.status == "done"
             and lr.structured_data
@@ -186,7 +174,6 @@ def deterministic_decision(
                 current_task="Tell the user internal search is temporarily unavailable. Do not invent an answer.",
             )
         
-        # Terminal permission failure
         if lr.issue == "permission_denied":
             already_explained = any(
                 r.route == "convo" and r.status == "done" for r in turn_history
@@ -204,7 +191,6 @@ def deterministic_decision(
                 ),
             )
 
-        # RAG found nothing
         if lr.source == "rag" and lr.issue == "no_matching_documents":
             logger.debug("rag_no_matching_documents")
             return SupervisorDecision(
@@ -215,7 +201,6 @@ def deterministic_decision(
                 ),
             )
 
-        # Same specialist already failed/partial once → explain & stop
         same_route_failures = [
             r for r in turn_history
             if r.route == lr.source and r.status in ("partial", "failed")
@@ -274,7 +259,6 @@ def post_decision_guards(
             )
             return SupervisorDecision(next="end", current_task="")
 
-    # After a successful result, never send back to the same specialist
     if (
         state.last_result
         and state.last_result.status == "done"
@@ -294,8 +278,7 @@ def post_decision_guards(
                 extra={"count": state.clarification_count,
                        "cap": MAX_CLARIFICATIONS_PER_TURN},
             )
-            # Route to convo rather than end so the user gets an actual reply
-            # instead of silence.
+            # Route to convo, not end, so the user still gets a reply.
             return SupervisorDecision(
                 next="convo",
                 current_task=(
@@ -318,10 +301,7 @@ def enforce_task_history_guard(
     decision: SupervisorDecision,
     task_history: list[TaskRecord],
 ) -> SupervisorDecision:
-    """
-    Block the exact same completed task on the same route within the same turn.
-    (Preserved from the original implementation, with normalized comparison.)
-    """
+    """Block the exact same completed task on the same route within the same turn."""
     if decision.next == "end":
         return decision
 
@@ -364,10 +344,6 @@ def gather_context(
         try:
             known_facts = format_facts_for_prompt(user_id)
         except Exception as e:
-            # Long-term memory is a nice-to-have, not a hard dependency, same
-            # reasoning as Finalize's write-side handling. A DB hiccup here
-            # should degrade this turn's context, not crash the entire graph
-            # on what might just be "hello".
             logger.warning(
                 "known_facts_lookup_failed_continuing_without_it",
                 extra={"error": str(e)},
@@ -489,10 +465,7 @@ def get_current_turn(state: SupervisorState) -> int:
 
 
 def map_to_state(decision: SupervisorDecision) -> dict:
-    """
-    Clear last_result when routing to a specialist that should start fresh.
-    Keep it for visu/end so downstream nodes can still read structured_data.
-    """
+    """Clear last_result unless routing to visu/end, which still need structured_data."""
     if decision.next in ("end", "visu"):
         return {
             "next": decision.next,

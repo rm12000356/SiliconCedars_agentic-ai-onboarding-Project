@@ -1,12 +1,3 @@
-"""
-Database connections for the app's two access tiers.
-
-Both get_general_connection() and get_elevated_connection() return a context
-manager (they hand out pooled connections), so callers must use
-``with get_*_connection() as conn:``. External direct-style scripts that expect
-a bare psycopg connection need to adapt.
-"""
-
 import atexit
 import os
 import threading
@@ -95,18 +86,9 @@ def _get_elevated_pool() -> ConnectionPool:
 
 
 def get_general_connection(acquire_timeout: int | None = None):
-    """
-    Connection for the free-form SQL agent path. Uses general_role,
-    which has SELECT only on non-sensitive tables. Sensitive tables
-    are not queryable through this connection at all.
-
-    Returns a pooled connection context manager: on exit the connection
-    is returned to the pool instead of being closed and re-established.
-
-    `acquire_timeout` bounds how long to wait for a pooled connection
-    (used by short-lived reachability probes). The underlying PostgreSQL
-    connect attempt is bounded separately by DB_CONNECT_TIMEOUT.
-    """
+    """General-role connection for the free-form SQL path (no access to
+    sensitive tables). `acquire_timeout` bounds pool wait only; the libpq
+    connect attempt is bounded separately by DB_CONNECT_TIMEOUT."""
     pool = _get_general_pool()
     if acquire_timeout is None:
         return pool.connection()
@@ -114,13 +96,8 @@ def get_general_connection(acquire_timeout: int | None = None):
 
 
 def get_elevated_connection():
-    """
-    Connection for the fixed, gated tools only (get_salary,
-    get_user_credential). Never used for free-form/agent-generated SQL.
-
-    Pooled like the general connection: returned to the pool, not closed,
-    when the calling context exits.
-    """
+    """Elevated connection for the fixed, gated tools only (get_salary,
+    get_user_credential); never used for free-form SQL."""
     return _get_elevated_pool().connection()
 
 

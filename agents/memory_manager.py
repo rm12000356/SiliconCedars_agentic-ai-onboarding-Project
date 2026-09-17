@@ -20,7 +20,6 @@ def memory_manager(state: SupervisorState) -> dict:
     update["chart_path"] = None
     logger.info("[MEMORY] starting turn %s", new_turn)
 
-    # --- Prune/summarize old messages ---
     if len(state.messages) > MESSAGE_THRESHOLD:
         to_summarize = state.messages[:-KEEP_RECENT_MESSAGES]
         transcript = "\n".join(f"{m.type}: {m.content}" for m in to_summarize)
@@ -48,7 +47,6 @@ def memory_manager(state: SupervisorState) -> dict:
         update["conversation_summary"] = str(summary_response.content)
         logger.debug("[MEMORY] summary: %r", str(summary_response.content)[:200])
 
-    # --- Prune old task_history entries ---
     cutoff = new_turn - TASK_HISTORY_KEEP_TURNS
     kept_history = [r for r in state.task_history if r.turn > cutoff]
     if len(kept_history) != len(state.task_history):

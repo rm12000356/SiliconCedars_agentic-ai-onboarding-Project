@@ -169,7 +169,6 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
             clean_output = _serialize(tool_output)
             logger.debug("[SQL] tool result: %s", str(clean_output)[:300])
 
-            # Keep a simple record of what we learned
             collected_facts.append(f"{call['name']}({call['args']}) → {clean_output}")
 
             detected = _extract_chartable_rows(clean_output)
@@ -181,10 +180,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
                 ToolMessage(content=str(clean_output), tool_call_id=call["id"])
             )
 
-    # ---------------------------------------------------------------
-    # Exhausted iterations – but we may already have the data.
-    # Synthesize a final answer instead of returning failed.
-    # ---------------------------------------------------------------
+    # Iterations exhausted; synthesize an answer from whatever we already have.
     if collected_facts:
         logger.info("[SQL] max iterations reached, synthesizing answer from collected facts")
         synthesis_prompt = [
@@ -202,9 +198,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
             final = llm().invoke(synthesis_prompt)
             summary = str(final.content)
             if not summary.strip():
-                # An empty synthesis is not a success. Reporting it as "done"
-                # sent an empty string through Finalize and rendered a blank
-                # chat bubble.
+                # An empty synthesis is not a success (it renders a blank bubble).
                 summary = "Could not produce an answer from the data retrieved."
                 status = "failed"
                 issue = "empty_synthesis"

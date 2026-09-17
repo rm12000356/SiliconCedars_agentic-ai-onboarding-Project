@@ -35,7 +35,6 @@ def Report_W(state: SubGraphSupervisorState) -> dict:
             "report_written": True,
         }
 
-    # Use the accumulated research messages
     research_material = "\n\n".join(
         _content_to_str(m.content) for m in state.research_messages
     )

@@ -11,17 +11,9 @@ DEFAULT_STORAGE_DIR = ".chainlit_charts"
 
 
 class LocalChartStorage(BaseStorageClient):
-    """
-    Minimal local-filesystem storage client.
-
-    Without a storage client, SQLAlchemyDataLayer.create_element() returns
-    early (see chainlit/data/sql_alchemy.py), so elements such as chart
-    images are never persisted and disappear when the thread is reloaded.
-    This client writes element bytes under ``base_dir`` and hands Chainlit
-    an opaque token URL served back through an authenticated route (see
-    chat.py), so the raw object key never appears in a URL.
-    """
-
+    """Local-filesystem storage client. Without one, Chainlit's data layer
+    never persists elements and chart images vanish on thread reload; files
+    are written under ``base_dir`` and served via an opaque token URL."""
     def __init__(self, base_dir: str | os.PathLike[str] | None = None) -> None:
         self.base_dir = Path(
             base_dir or os.getenv("CHART_STORAGE_DIR", DEFAULT_STORAGE_DIR)

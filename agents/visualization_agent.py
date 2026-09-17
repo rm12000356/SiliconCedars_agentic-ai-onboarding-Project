@@ -282,12 +282,7 @@ def _render_chart(spec: ChartSpec) -> Path:
 
 
 def _title_from_task(task: str) -> str:
-    """
-    Deterministic title fallback.
-
-    We deliberately do not ask another LLM call just to produce a title.
-    """
-
+    """Deterministic title fallback (no extra LLM call just for a title)."""
     cleaned = " ".join(task.split())
 
     if len(cleaned) <= 80:
@@ -296,12 +291,8 @@ def _title_from_task(task: str) -> str:
     return cleaned[:77].rstrip() + "..."
 
 def _title_from_user_request(state: SupervisorState) -> str:
-    """
-    Prefer the original user request over the supervisor's internal task
-    description. Clarification answers are skipped: after a round-trip the
-    last HumanMessage is the answer ("2024"), which became the chart title.
-    Falls back to the task string if no user request is found.
-    """
+    """Prefer the original user request over the internal task description.
+    Clarification answers are skipped (they made bad titles like "2024")."""
     text = latest_user_request(state.messages)
 
     if text:
@@ -316,17 +307,12 @@ def _title_from_user_request(state: SupervisorState) -> str:
 
         return text[:80] if len(text) <= 80 else text[:77].rstrip() + "..."
 
-    # fallback
     return _title_from_task(state.current_task or "Chart")
 
 
 def _explicit_chart_type(text: str) -> Literal["bar", "line", "pie"] | None:
-    """
-    Explicit chart type stated in text, or None when nothing is named.
-
-    Returning None (rather than defaulting to bar) lets _resolve_chart_type
-    try several sources in precedence order before falling back.
-    """
+    """Explicit chart type in text, or None so _resolve_chart_type can try
+    the other sources before defaulting."""
     lowered = (text or "").lower()
 
     if "pie chart" in lowered or "pie graph" in lowered:
@@ -339,23 +325,13 @@ def _explicit_chart_type(text: str) -> Literal["bar", "line", "pie"] | None:
 
 
 def _chart_type_from_task(task: str) -> Literal["bar", "line", "pie"]:
-    """
-    Deterministic chart-type selection for structured specialist data.
-
-    Explicit user intent wins. Bar is the safe default.
-    """
+    """Deterministic chart-type selection; explicit intent wins, bar is the default."""
     return _explicit_chart_type(task) or "bar"
 
 
 def _resolve_chart_type(state: SupervisorState) -> Literal["bar", "line", "pie"]:
-    """
-    Resolve the chart type from the most specific intent source available.
-
-    Precedence: the most recent clarification answer first (it is the user's
-    latest, refined intent), then the original request, then the Supervisor's
-    internal task. latest_user_request deliberately skips clarification
-    answers, so without this an answer like "pie chart" was silently ignored.
-    """
+    """Resolve the chart type, newest intent first: clarification answers,
+    then the original request, then the internal task. Defaults to bar."""
     sources: list[str | None] = list(reversed(clarification_answers(state.messages)))
     sources.append(latest_user_request(state.messages))
     sources.append(state.current_task)

@@ -148,7 +148,6 @@ async def main(message: cl.Message):
         await cl.Message(content="Please log in first.").send()
         return
 
-    # Real identity from login
     user_id = app_user.identifier
     permission_level = (app_user.metadata or {}).get(
         "permission_level",
@@ -165,9 +164,6 @@ async def main(message: cl.Message):
         }
     }
 
-    # ---------------------------------------------------------
-    # RESUME A PAUSED GRAPH (source of truth is the checkpoint)
-    # ---------------------------------------------------------
     try:
         snapshot = await asyncio.to_thread(graph.get_state, config)
         paused = has_pending_interrupt(snapshot)

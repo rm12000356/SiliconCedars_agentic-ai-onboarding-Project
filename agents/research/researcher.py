@@ -121,11 +121,9 @@ def Research(state: SubGraphSupervisorState) -> dict:
 
         messages.append(response)
 
-        # Model decided to stop → return its final answer
         if not response.tool_calls:
             return {"research_messages": [response]}
 
-        # Execute tool calls
         for call in response.tool_calls:
             name = call["name"]
             args = call["args"]
@@ -176,6 +174,5 @@ def Research(state: SubGraphSupervisorState) -> dict:
             logger.debug("[RESEARCH] enough material gathered -> forcing final note")
             return _final_note(messages)
 
-    # Hard stop
     logger.debug("[RESEARCH] max iterations reached -> forcing final note")
     return _final_note(messages)
