@@ -29,14 +29,19 @@ def is_clarification_answer(message) -> bool:
 
 
 def clarification_answers(messages) -> list[str]:
-    """Text of HumanMessages flagged as clarification answers, chronological."""
+    """Tagged clarification answers for the current turn only: those after
+    the most recent untagged user request."""
     answers: list[str] = []
-    for message in messages or []:
-        if isinstance(message, HumanMessage) and is_clarification_answer(message):
+    for message in reversed(messages or []):
+        if not isinstance(message, HumanMessage):
+            continue
+        if is_clarification_answer(message):
             text = " ".join(content_to_text(message.content).split())
             if text:
                 answers.append(text)
-    return answers
+            continue
+        break
+    return list(reversed(answers))
 
 
 def latest_user_request(messages) -> Optional[str]:

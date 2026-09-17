@@ -21,7 +21,6 @@ def test_clarification_answers_collected_in_order():
         HumanMessage(content="show me a chart"),
         AIMessage(content="which kind?"),
         _answer("pie chart"),
-        HumanMessage(content="thanks"),
         _answer("2024"),
     ]
 
@@ -40,3 +39,17 @@ def test_latest_user_request_still_returns_original():
     ]
 
     assert latest_user_request(messages) == "show me a chart"
+
+
+def test_clarification_answers_scoped_to_current_turn():
+    messages = [
+        HumanMessage(content="show me a chart"),
+        AIMessage(content="which kind?"),
+        _answer("pie chart"),
+        HumanMessage(content="thanks"),
+        HumanMessage(content="now show me sales"),
+        AIMessage(content="which kind?"),
+        _answer("line chart"),
+    ]
+
+    assert clarification_answers(messages) == ["line chart"]

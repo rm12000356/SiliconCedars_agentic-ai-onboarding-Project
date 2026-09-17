@@ -68,6 +68,10 @@ def run():
 
             last_message = result["messages"][-1]
             print(f"\nAssistant: {last_message.content}")
+
+            chart_path = result.get("chart_path")
+            if chart_path:
+                print(f"(chart saved to {chart_path})")
     finally:
         if memory_context is not None:
             memory_context.__exit__(None, None, None)

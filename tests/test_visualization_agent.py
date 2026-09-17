@@ -107,6 +107,55 @@ def test_resolve_chart_type_defaults_to_bar():
     assert _resolve_chart_type(state) == "bar"
 
 
+def test_resolve_chart_type_ignores_stale_answer():
+    state = SupervisorState(
+        messages=[
+            HumanMessage(content="show me a chart of sales"),
+            AIMessage(content="Which type of chart?"),
+            HumanMessage(
+                content="pie chart",
+                additional_kwargs={CLARIFICATION_ANSWER_FLAG: True},
+            ),
+            HumanMessage(content="now show me a line chart of sales"),
+        ],
+        current_task="Create a chart from the previous result.",
+    )
+
+    assert _resolve_chart_type(state) == "line"
+
+
+def test_resolve_chart_type_accepts_bare_pie_answer():
+    state = SupervisorState(
+        messages=[
+            HumanMessage(content="show me a chart of sales"),
+            AIMessage(content="Which type of chart?"),
+            HumanMessage(
+                content="as a pie",
+                additional_kwargs={CLARIFICATION_ANSWER_FLAG: True},
+            ),
+        ],
+        current_task="Create a chart from the previous result.",
+    )
+
+    assert _resolve_chart_type(state) == "pie"
+
+
+def test_resolve_chart_type_accepts_bare_line_answer():
+    state = SupervisorState(
+        messages=[
+            HumanMessage(content="show me a chart of sales over time"),
+            AIMessage(content="Which type of chart?"),
+            HumanMessage(
+                content="as a line",
+                additional_kwargs={CLARIFICATION_ANSWER_FLAG: True},
+            ),
+        ],
+        current_task="Create a chart from the previous result.",
+    )
+
+    assert _resolve_chart_type(state) == "line"
+
+
 def test_structured_path_uses_clarification_chart_type(tmp_path, monkeypatch):
     monkeypatch.setattr(visualization_agent, "OUTPUT_DIR", tmp_path)
     captured = {}

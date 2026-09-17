@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -237,8 +238,11 @@ def _user_wants_visualization(state: SupervisorState) -> bool:
     if not text:
         return False
 
-    keywords = ["chart", "graph", "plot", "visualize", "visualise", "bar", "pie", "line chart"]
-    return any(k in text for k in keywords)
+    if "line chart" in text or "line graph" in text:
+        return True
+    return bool(
+        re.search(r"\b(chart|graph|plot|visuali[sz]e|bar|bars|pie|pies)\b", text)
+    )
 
 
 def post_decision_guards(

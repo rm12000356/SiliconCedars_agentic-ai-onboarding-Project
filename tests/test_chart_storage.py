@@ -53,3 +53,10 @@ def test_token_is_opaque_and_reversible(tmp_path):
 
     assert "/" not in token
     assert storage.decode_token(token) == key
+
+
+def test_owner_of_returns_first_segment(tmp_path):
+    storage = LocalChartStorage(base_dir=tmp_path)
+
+    assert storage.owner_of("user-uuid/elem-uuid/chart.png") == "user-uuid"
+    assert storage.owner_of("/user-uuid/elem-uuid/chart.png") == "user-uuid"

@@ -60,17 +60,20 @@ chart_routes = APIRouter(dependency_overrides_provider=app)
 @chart_routes.get("/charts/{token}")
 async def serve_chart(token: str, user=Depends(get_current_user)):
     """
-    Authenticated endpoint for persisted chart images.
+    Authenticated, owner-scoped endpoint for persisted chart images.
 
-    LocalChartStorage.get_read_url returns an opaque base64url token;
-    Chainlit element URLs are loaded by the browser with the session
-    cookie, and get_current_user enforces login. Raw object keys never
-    appear in a URL and the storage directory is never served publicly.
+    LocalChartStorage.get_read_url returns an opaque base64url token.
+    get_current_user enforces login, and the token's object key is bound to
+    the requester's user id so one user cannot fetch another user's chart.
     """
     try:
         object_key = CHART_STORAGE.decode_token(token)
         path = CHART_STORAGE.resolve(object_key)
     except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=404, detail="Chart not found")
+
+    current_id = getattr(user, "id", None)
+    if not current_id or CHART_STORAGE.owner_of(object_key) != str(current_id):
         raise HTTPException(status_code=404, detail="Chart not found")
 
     if not path.is_file():

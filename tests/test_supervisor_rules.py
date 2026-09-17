@@ -225,6 +225,48 @@ def test_user_wants_visualization_from_clarification_answer():
     assert _user_wants_visualization(state)
 
 
+def test_intent_from_bare_pie_answer():
+    state = SupervisorState(
+        messages=[
+            HumanMessage(content="show me the sales numbers"),
+            AIMessage(content="Which view would you like?"),
+            HumanMessage(
+                content="as a pie",
+                additional_kwargs={CLARIFICATION_ANSWER_FLAG: True},
+            ),
+        ],
+        turn_count=1,
+    )
+
+    assert _user_wants_visualization(state)
+
+
+def test_stale_clarification_answer_does_not_trigger_visualization():
+    state = SupervisorState(
+        messages=[
+            HumanMessage(content="show me a chart of sales"),
+            AIMessage(content="Which view would you like?"),
+            HumanMessage(
+                content="pie chart",
+                additional_kwargs={CLARIFICATION_ANSWER_FLAG: True},
+            ),
+            HumanMessage(content="what were total sales last quarter?"),
+        ],
+        turn_count=2,
+    )
+
+    assert not _user_wants_visualization(state)
+
+
+def test_intent_ignores_bar_substring():
+    state = SupervisorState(
+        messages=[HumanMessage(content="How is the Barcelona office doing?")],
+        turn_count=1,
+    )
+
+    assert not _user_wants_visualization(state)
+
+
 def test_same_route_cap_forces_end():
     history = [
         _record(route="sql", task="a"),

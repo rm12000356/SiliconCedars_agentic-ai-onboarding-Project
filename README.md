@@ -289,7 +289,7 @@ LLM-as-judge correctness is used only when a reference answer exists.
   The Chainlit entry point renders the generated PNG inline (`cl.Image`). Element
   files are persisted by a local storage client and served through an
   authenticated `/charts/<token>` route, so charts survive a page refresh. The
-  `main.py` CLI prints the file path only.
+  `main.py` CLI prints the file path instead of rendering the image.
 
 * **No cross-turn data chaining**
   Requests such as `"chart that"` after a previous `Finalize` are not supported. Same-turn SQL → visualization is supported.

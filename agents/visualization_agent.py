@@ -1,6 +1,7 @@
 import logging
 import math
 import os
+import re
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -320,6 +321,15 @@ def _explicit_chart_type(text: str) -> Literal["bar", "line", "pie"] | None:
 
     if "line chart" in lowered or "line graph" in lowered:
         return "line"
+
+    if re.search(r"\bpie(s)?\b", lowered):
+        return "pie"
+
+    if re.search(r"\bline\b", lowered):
+        return "line"
+
+    if re.search(r"\bbar(s)?\b", lowered):
+        return "bar"
 
     return None
 

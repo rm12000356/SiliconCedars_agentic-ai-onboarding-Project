@@ -43,6 +43,11 @@ class LocalChartStorage(BaseStorageClient):
     def url_for(self, object_key: str) -> str:
         return f"/charts/{self.encode_token(object_key)}"
 
+    @staticmethod
+    def owner_of(object_key: str) -> str:
+        """First path segment of an object key (the owning user's id)."""
+        return object_key.strip().lstrip("/\\").split("/", 1)[0]
+
     async def upload_file(
         self,
         object_key: str,
