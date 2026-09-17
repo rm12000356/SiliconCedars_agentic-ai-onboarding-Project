@@ -119,6 +119,7 @@ DB_POOL_MAX_SIZE_GENERAL=5
 DB_POOL_MAX_SIZE_ELEVATED=3
 DB_POOL_ACQUIRE_TIMEOUT=30
 DB_CONNECT_TIMEOUT=5
+CHART_STORAGE_DIR=.chainlit_charts
 ```
 
 Use `general` unless you are explicitly testing salary or credential paths.

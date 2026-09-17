@@ -96,12 +96,10 @@ def Visualization(state: SupervisorState) -> dict:
         return {
             "last_result": SpecialistResult(
                 source="visu",
-                summary=(
-                    f"Chart '{spec.title}' created successfully "
-                    f"and saved to {filepath}."
-                ),
+                summary=f"Here's the chart: {spec.title}.",
                 status="done",
-            )
+            ),
+            "chart_path": str(filepath),
         }
 
     except ValueError as exc:
@@ -128,7 +126,8 @@ def _failed_result(summary: str, issue: str) -> dict:
             summary=summary,
             status="failed",
             issue=issue,
-        )
+        ),
+        "chart_path": None,
     }
 
 

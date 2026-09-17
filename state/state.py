@@ -158,6 +158,15 @@ class SupervisorState(BaseModel):
             "injected at the top of the Supervisor prompt instead."
         ),
     )
+    chart_path: Optional[str] = Field(
+        default=None,
+        description=(
+            "Filesystem path of the most recent chart PNG, if any. Set by the "
+            "Visualization node and consumed by the web entry point to render the "
+            "image. Reset by memory_manager at the start of each turn so a stale "
+            "chart is never re-sent."
+        ),
+    )
 
 
 class SubGraphSupervisorState(BaseModel):

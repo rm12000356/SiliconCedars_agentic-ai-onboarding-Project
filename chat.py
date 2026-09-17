@@ -5,11 +5,16 @@ from typing import Any, Optional, cast
 import atexit
 import chainlit as cl
 from dotenv import load_dotenv
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
+from chainlit.auth import get_current_user
 from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
+from chainlit.server import app
 from langchain_core.runnables import RunnableConfig
 from services.memory import get_checkpointer
+from services.chart_storage import LocalChartStorage
 from graph.workflow import Main_WorkFlow, has_pending_interrupt
 from services.auth import authenticate
 from services.logging_config import configure_logging
@@ -18,6 +23,8 @@ load_dotenv()
 configure_logging()
 
 logger = logging.getLogger(__name__)
+
+CHART_STORAGE = LocalChartStorage()
 
 @cl.password_auth_callback
 async def auth_callback(username: str, password: str) -> Optional[cl.User]:
@@ -44,7 +51,47 @@ def get_data_layer():
             "CHAINLIT_DATABASE_URL is not set. "
             "Please add it to your .env file."
         )
-    return SQLAlchemyDataLayer(conninfo=database_url)
+    return SQLAlchemyDataLayer(conninfo=database_url, storage_provider=CHART_STORAGE)
+
+
+chart_routes = APIRouter(dependency_overrides_provider=app)
+
+
+@chart_routes.get("/charts/{token}")
+async def serve_chart(token: str, user=Depends(get_current_user)):
+    """
+    Authenticated endpoint for persisted chart images.
+
+    LocalChartStorage.get_read_url returns an opaque base64url token;
+    Chainlit element URLs are loaded by the browser with the session
+    cookie, and get_current_user enforces login. Raw object keys never
+    appear in a URL and the storage directory is never served publicly.
+    """
+    try:
+        object_key = CHART_STORAGE.decode_token(token)
+        path = CHART_STORAGE.resolve(object_key)
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=404, detail="Chart not found")
+
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Chart not found")
+
+    return FileResponse(path, media_type="image/png")
+
+
+# Chainlit registers an SPA catch-all ("/{full_path:path}") inside the router it
+# includes at import time, so a route added to `app` afterwards is shadowed and
+# every /charts request returns index.html. Splice ours in ahead of the included
+# router so FastAPI matches it first.
+_included_router_idx = next(
+    (
+        index
+        for index, route in enumerate(app.router.routes)
+        if type(route).__name__ == "_IncludedRouter"
+    ),
+    0,
+)
+app.router.routes[_included_router_idx:_included_router_idx] = chart_routes.routes
 
 
 memory, memory_context = get_checkpointer()
@@ -156,4 +203,16 @@ async def main(message: cl.Message):
     messages = result.get("messages", [])
     if messages:
         response = messages[-1].content
-        await cl.Message(content=str(response)).send()
+
+        elements = []
+        chart_path = result.get("chart_path")
+        if chart_path and os.path.exists(chart_path):
+            elements.append(
+                cl.Image(
+                    path=chart_path,
+                    name=os.path.basename(chart_path),
+                    display="inline",
+                )
+            )
+
+        await cl.Message(content=str(response), elements=elements).send()
