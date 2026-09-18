@@ -234,6 +234,36 @@ Run integration tests:
 pytest -m integration
 ```
 
+### Prerequisites
+
+`pytest.ini` sets a default filter (`-m "not llm and not integration"`), so a plain `pytest` run never calls the LLM or touches the database.
+
+* **LLM tests** (`llm`): require `GROQ_API_KEY` or `OPENROUTER_API_KEY`.
+* **Integration tests** (`integration`): require a running Postgres (`docker compose up -d`) and the `DB_*` / `DATABASE_URL` environment variables.
+* **Postgres checkpointer tests**: additionally require `DATABASE_URL` and `CHECKPOINT_BACKEND=postgres`.
+
+### Test Commands
+
+| Command | What it runs |
+| --- | --- |
+| `pytest` | Unit tests only (default; excludes `llm` and `integration`) |
+| `pytest -m "not llm and not integration"` | Same as `pytest`, written explicitly |
+| `pytest -m llm` | Live LLM tests (`test_llm_*.py`, RAG grounding, SQL permission gating) |
+| `pytest -m integration` | Tests requiring live services (DB roles, checkpointer, pools, chart route) |
+| `pytest -m "llm or integration"` | All live tests |
+| `pytest -m "not llm"` | Unit + integration |
+| `pytest -m "not integration"` | Unit + LLM |
+| `pytest tests/test_routing.py -m` | A single test file |
+| `pytest tests/test_routing.py::test_name -m` | A single test |
+| `pytest -k "sql"` | Tests whose name matches a keyword |
+| `pytest tests/test_security_boundaries.py tests/test_sql_roles.py` | Security keyword boundaries + DB role boundaries |
+| `pytest --markers` | List registered markers |
+| `pytest --collect-only -q` | List tests without running them |
+| `pytest -v` | Verbose per-test output |
+| `pytest -x` | Stop on the first failure |
+
+To exclude a marker, quote the expression: `pytest -m "not llm"`. The form `pytest -m -llm` is not valid.
+
 ### Test Categories
 
 * **Unit**

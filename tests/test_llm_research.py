@@ -74,8 +74,8 @@ def test_llm_researcher_single_pass_bounded():
     finally:
         recorder.stop()
 
-    assert "messages" in result
-    assert len(result["messages"]) >= 1
+    assert "research_messages" in result
+    assert len(result["research_messages"]) >= 1
 
     search_calls = [c for c in recorder.names() if c == "web_search"]
     assert len(search_calls) <= MAX_SEARCH_ATTEMPTS + 1, (
@@ -86,7 +86,8 @@ def test_llm_researcher_single_pass_bounded():
 def test_llm_report_writer_sets_report_written():
     """Report writer must always set report_written so the controller can end."""
     state = SubGraphSupervisorState(
-        messages=[
+        messages=[],
+        research_messages=[
             HumanMessage(
                 content="Key findings: Paris is the capital of France. Sources: Example Encyclopedia (https://example.com)"
             )
@@ -96,7 +97,7 @@ def test_llm_report_writer_sets_report_written():
     result = Report_W(state)
 
     assert result.get("report_written") is True
-    assert "messages" in result and len(result["messages"]) >= 1
+    assert "research_messages" in result and len(result["research_messages"]) >= 1
     assert "research_succeeded" in result
 
 
@@ -138,5 +139,5 @@ def test_llm_full_research_pipeline_stops_within_attempt_budget():
         result.get("research_attempts", 0) <= MAX_RESEARCH_ATTEMPTS + 1
     ), f"research subgraph did not terminate cleanly: keys={list(result.keys())}"
 
-    assert "messages" in result
-    assert len(result["messages"]) >= 1
+    assert "research_messages" in result
+    assert len(result["research_messages"]) >= 1
