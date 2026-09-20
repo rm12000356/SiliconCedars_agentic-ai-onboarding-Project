@@ -37,7 +37,7 @@ Decide the single best next route for the latest user request.
 
 ### Routes
 - rag: Internal company documents, policies, procedures, lessons-learned, and organizational knowledge. Choose this when the answer lives in a document: what a policy says, what a procedure is, or what was learned from a past project. Do NOT use it for concrete records in the operational database.
-- research: External/public information. ONLY when the user explicitly asks to research, look up, or find external information. Never use for company topics.
+- research: External/public information, including current or time-sensitive facts (today's weather, the latest price, who currently holds a position, recent news). Use it whenever the answer is not company-internal and may have changed since training, even if the user did not say "research". Never use it for company-internal topics.
 - sql: Live structured data from the operational database — counts, sums, lists, filters, rankings, and lookups of specific records such as one person's department, salary, or employee ID, a sale's amount/date, or a credential row. Choose sql whenever the answer is a field value in a table, even when the question names a person and is phrased like "What is <name>'s <field>?" or "Find the <id> for <name>".
 - visu: Only when structured_data already exists from a previous result and the user wants a chart/graph/plot.
 - convo: You can answer directly (greetings, goodbyes, definitions, small talk, clarifying your own previous answer, or light synthesis).
@@ -51,6 +51,7 @@ Decide the single best next route for the latest user request.
 - Goodbyes, thanks, and small talk → convo.
 - Facts about a specific record/entity in the database (a named person's department, salary, or ID; a sale row; a count or list of rows) → sql, even when phrased conversationally.
 - Questions about what a document/policy/procedure says, or what was learned from past projects → rag.
+- Questions about current, latest, or time-sensitive external facts (current CEO/president, latest price, today's weather, recent news) → research, even without an explicit "research" verb.
 - Definitions and general knowledge (e.g. "What does SQL stand for?", "What does RAG mean?") → convo, never sql.
 - If the latest user message contains multiple distinct asks and the last specialist result only answered part of it, route to the appropriate specialist for the remaining part instead of ending.
 - Focus almost exclusively on the latest user message and the latest specialist result. Ignore older conversation history unless it is directly needed to understand the current request.
@@ -68,6 +69,9 @@ Decide by where the answer comes from:
 - "What is the company remote work policy?" → rag
 - "What did we learn about SQL security from past internal projects?" → rag
 - "What does SQL stand for?" → convo
+- "Who is the current CEO of OpenAI?" → research
+- "What is the latest price of gold?" → research
+- "What is the latest sale_date in the sales table?" → sql (company-internal data, not external research)
 - "How many employees are there, and what does the remote work policy say?" → sql first; once the count is answered, the remaining policy question → rag
 
 ### current_task

@@ -98,6 +98,10 @@ RESEARCH_CASES = [
     ("Find recent papers on vector databases online.", frozenset({"research"})),
     ("Search for the official Python 3.13 release notes online.", frozenset({"research"})),
     ("Research the current Bitcoin price on the public web.", frozenset({"research"})),
+    # Freshness: current facts without an explicit "research" verb.
+    ("Who is the current CEO of OpenAI?", frozenset({"research"})),
+    ("Who is the current president of France?", frozenset({"research"})),
+    ("What is the latest version of Python?", frozenset({"research"})),
 ]
 
 VISU_CASES = [
