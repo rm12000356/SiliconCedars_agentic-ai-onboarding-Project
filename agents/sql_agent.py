@@ -124,13 +124,18 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
                 )
             }
         except BadRequestError as e:
+            # A malformed/unsupported tool call is not an authorization
+            # failure; reporting it as permission_denied misleads the user.
             logger.warning("[SQL] bad request: %s: %s", type(e).__name__, e)
             return {
                 "last_result": SpecialistResult(
                     source="sql",
-                    summary="This request requires data or tools that are not available for the current permission level.",
+                    summary=(
+                        "The database request could not be completed. "
+                        "Please rephrase your question."
+                    ),
                     status="failed",
-                    issue="permission_denied",
+                    issue="invalid_request",
                 )
             }
         messages.append(response)

@@ -64,3 +64,26 @@ def test_sql_agent_raises_on_missing_current_task():
     state = SupervisorState(messages=[], current_task=None)
     with pytest.raises(RuntimeError, match="current_task=None"):
         Sql_agent(state, make_config("general"))
+
+
+def test_bad_request_reports_invalid_request_not_permission(monkeypatch):
+    class _BadRequest(Exception):
+        pass
+
+    monkeypatch.setattr("agents.sql_agent.BadRequestError", _BadRequest)
+
+    class _Model:
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def invoke(self, messages):
+            raise _BadRequest("tool_use_failed")
+
+    monkeypatch.setattr("agents.sql_agent.llm", lambda *a, **k: _Model())
+
+    result = Sql_agent(
+        make_sql_state("List all employees"), make_config("general")
+    )["last_result"]
+
+    assert result.status == "failed"
+    assert result.issue == "invalid_request"
