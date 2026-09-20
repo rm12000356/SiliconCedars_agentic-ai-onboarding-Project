@@ -19,8 +19,9 @@ from services.memory import get_checkpointer
 from services.chart_storage import LocalChartStorage
 from graph.workflow import Main_WorkFlow, has_pending_interrupt
 from services.auth import authenticate
-from services.budget import budget_scope
+from services.budget import budget_scope, TurnBudgetExceeded
 from services.logging_config import configure_logging
+from agents.finalize import OUTAGE_MESSAGE
 
 load_dotenv()
 configure_logging()
@@ -179,17 +180,25 @@ async def main(message: cl.Message):
         )
         paused = False
 
-    with budget_scope():
-        if paused:
-            result = await asyncio.to_thread(
-                graph.invoke, Command(resume=message.content), config
-            )
-        else:
-            result = await asyncio.to_thread(
-                graph.invoke,
-                cast(Any, {"messages": [HumanMessage(content=message.content)]}),
-                config,
-            )
+    # One aggregate LLM budget per inbound message. A clarification resume
+    # arrives as a new on_message call, so Chainlit budgets are per-message,
+    # not per logical turn (unlike the CLI, which spans the clarification loop).
+    try:
+        with budget_scope():
+            if paused:
+                result = await asyncio.to_thread(
+                    graph.invoke, Command(resume=message.content), config
+                )
+            else:
+                result = await asyncio.to_thread(
+                    graph.invoke,
+                    cast(Any, {"messages": [HumanMessage(content=message.content)]}),
+                    config,
+                )
+    except (TurnBudgetExceeded, RuntimeError):
+        logger.exception("graph invoke failed; returning outage message")
+        await cl.Message(content=OUTAGE_MESSAGE).send()
+        return
 
     interrupts = result.get("__interrupt__")
 

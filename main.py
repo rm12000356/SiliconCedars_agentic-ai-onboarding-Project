@@ -6,8 +6,9 @@ from evaluation.evaluation import run_routing_evaluation, run_rag_evaluation
 
 from graph.workflow import Main_WorkFlow
 from agents.clarification import resume_clarification
+from agents.finalize import OUTAGE_MESSAGE
 from services.memory import get_checkpointer
-from services.budget import budget_scope
+from services.budget import budget_scope, TurnBudgetExceeded
 from services.logging_config import configure_logging
 
 
@@ -51,22 +52,29 @@ def run():
                 print("\nEvaluations complete. Check LangSmith for full results.")
                 continue
 
-            with budget_scope():
-                result = graph.invoke(
-                    {"messages": [HumanMessage(content=user_input)]},
-                    config=config,
-                )
-
-                while "__interrupt__" in result:
-                    interrupt_payload = result["__interrupt__"][0].value
-                    question = interrupt_payload["question"]
-                    answer = input(f"\n{question}\nYou: ").strip()
-                    result = resume_clarification(
-                        graph,
-                        thread_id,
-                        answer,
-                        config,
+            # One budget spans the whole logical turn, including clarification
+            # resumes. Only accumulated LLM call time counts, so a slow human
+            # answer cannot exhaust the wall-clock limit.
+            try:
+                with budget_scope():
+                    result = graph.invoke(
+                        {"messages": [HumanMessage(content=user_input)]},
+                        config=config,
                     )
+
+                    while "__interrupt__" in result:
+                        interrupt_payload = result["__interrupt__"][0].value
+                        question = interrupt_payload["question"]
+                        answer = input(f"\n{question}\nYou: ").strip()
+                        result = resume_clarification(
+                            graph,
+                            thread_id,
+                            answer,
+                            config,
+                        )
+            except (TurnBudgetExceeded, RuntimeError):
+                print(f"\nAssistant: {OUTAGE_MESSAGE}")
+                continue
 
             messages = result.get("messages") or []
             if messages:

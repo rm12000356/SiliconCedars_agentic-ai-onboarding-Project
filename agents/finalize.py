@@ -20,6 +20,11 @@ NO_ANSWER_FALLBACK = (
     "could you rephrase or add a bit more detail?"
 )
 
+OUTAGE_MESSAGE = (
+    "The assistant is temporarily unavailable due to a service issue. "
+    "Please try again in a moment."
+)
+
 
 def _might_contain_memorable_info(text: str) -> bool:
     lower = text.lower()
@@ -57,6 +62,14 @@ def _already_delivered(messages, content: str) -> bool:
 
 def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
     update: dict = {}
+
+    if state.outage:
+        # No provider was usable. Emit a static message and make no LLM calls.
+        if not _already_delivered(state.messages, OUTAGE_MESSAGE):
+            update["messages"] = [AIMessage(content=OUTAGE_MESSAGE)]
+        update["last_result"] = None
+        update["clarification_count"] = 0
+        return update
 
     if state.last_result is not None:
         result = state.last_result

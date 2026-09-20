@@ -1,7 +1,7 @@
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 
-from agents.finalize import Finalize, NO_ANSWER_FALLBACK
+from agents.finalize import Finalize, NO_ANSWER_FALLBACK, OUTAGE_MESSAGE
 from state.state import SpecialistResult, SupervisorState
 
 
@@ -53,3 +53,23 @@ def test_specialist_answer_is_appended_exactly_once():
     assert "messages" in update
     assert len(update["messages"]) == 1
     assert update["messages"][0].content == "Hi there!"
+
+
+def test_outage_emits_static_message_without_llm(monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("Finalize must not call the LLM during an outage")
+
+    monkeypatch.setattr("agents.finalize.llm", boom)
+
+    state = SupervisorState(
+        messages=[HumanMessage(content="hello")],
+        current_task="",
+        last_result=None,
+        turn_count=1,
+        outage=True,
+    )
+
+    update = Finalize(state, _config())
+
+    assert update["messages"][0].content == OUTAGE_MESSAGE
+    assert update["last_result"] is None

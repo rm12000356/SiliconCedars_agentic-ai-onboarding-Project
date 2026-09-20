@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+
+class LLMOutageError(RuntimeError):
+    """No LLM provider is usable (auth failure or transient outage).
+
+    Raised instead of routing to an agent that would itself need the LLM, so
+    the turn can terminate deterministically.
+    """
+
+
 _TRANSIENT_TOKENS = (
     "rate limit",
     "too many requests",

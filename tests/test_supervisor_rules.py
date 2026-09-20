@@ -9,18 +9,21 @@ from __future__ import annotations
 
 from typing import Literal
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agents.supervisor import (
     MAX_HOPS_PER_TURN,
     deterministic_decision,
     enforce_task_history_guard,
+    get_supervisor_decision,
     post_decision_guards,
     supervisor_agent,
     _user_wants_visualization,
 )
 from state.state import SpecialistResult, SupervisorState, TaskRecord
 from state.structure_output import SupervisorDecision
+from services.errors import LLMOutageError
 from services.message_utils import CLARIFICATION_ANSWER_FLAG
 
 
@@ -283,6 +286,43 @@ def test_routing_failure_non_sensitive_routes_to_convo(monkeypatch):
     update = supervisor_agent(state, {"configurable": {}})
 
     assert update["next"] == "convo"
+
+
+def test_llm_outage_ends_turn_deterministically(monkeypatch):
+    def outage(*_a, **_k):
+        raise LLMOutageError("transient")
+
+    monkeypatch.setattr("agents.supervisor.get_supervisor_decision", outage)
+    state = _state(text="Tell me something interesting.", turn_count=1)
+
+    update = supervisor_agent(state, {"configurable": {}})
+
+    assert update["next"] == "end"
+    assert update["outage"] is True
+
+
+def test_get_supervisor_decision_raises_on_auth_error():
+    class _AuthError(Exception):
+        status_code = 401
+
+    class _Structured:
+        def invoke(self, _prompt):
+            raise _AuthError("unauthorized")
+
+    class _Model:
+        def with_structured_output(self, _schema, **_kwargs):
+            return _Structured()
+
+    context = {
+        "messages": [],
+        "last_result": None,
+        "task_history": [],
+        "known_facts": "",
+        "conversation_summary": None,
+    }
+
+    with pytest.raises(LLMOutageError):
+        get_supervisor_decision(context, _Model())
 
 
 def test_same_route_cap_forces_end():
