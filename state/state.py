@@ -25,6 +25,15 @@ SpecialistRoute = Literal[
     "visu"
 ]
 
+PlanRoute = Literal[
+    "rag",
+    "convo",
+    "sql",
+    "research",
+    "visu",
+    "clarification",
+]
+
 SubRoute = Literal[
     "researcher",
     "report",
@@ -89,7 +98,7 @@ class PlanItem(BaseModel):
     back here, so Finalize can combine every completed result.
     """
 
-    route: SpecialistRoute = Field(description="Specialist that runs this step")
+    route: PlanRoute = Field(description="Specialist that runs this step")
     task: str = Field(description="Concrete task for that specialist")
     status: Literal["pending", "done", "failed", "skipped"] = Field(
         default="pending",
@@ -153,12 +162,6 @@ class SupervisorState(BaseModel):
     clarification_count: int = Field(
         default=0,
         description="Clarifications already asked this turn; reset by memory_manager."
-    )
-    multi_intent_hops: int = Field(
-        default=0,
-        description="Extra specialist hops granted for a multi-part request this "
-                    "turn; reset by memory_manager and capped by "
-                    "MAX_MULTI_INTENT_HOPS."
     )
     conversation_summary: Optional[str] = Field(
         default=None,

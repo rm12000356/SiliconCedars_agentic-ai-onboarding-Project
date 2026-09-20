@@ -16,9 +16,4 @@ def test_memory_manager_resets_chart_path_each_turn():
     assert update["chart_path"] is None
 
 
-def test_memory_manager_resets_multi_intent_hops_each_turn():
-    state = SupervisorState(messages=[], turn_count=1, multi_intent_hops=1)
 
-    update = memory_manager(state)
-
-    assert update["multi_intent_hops"] == 0

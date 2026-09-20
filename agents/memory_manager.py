@@ -18,7 +18,6 @@ def memory_manager(state: SupervisorState) -> dict:
     new_turn = state.turn_count + 1
     update["turn_count"] = new_turn
     update["clarification_count"] = 0
-    update["multi_intent_hops"] = 0
     update["chart_path"] = None
     update["plan"] = []
     update["plan_ready"] = False

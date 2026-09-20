@@ -5,11 +5,11 @@ import time
 import pytest
 from langchain_core.messages import HumanMessage
 
-from agents.supervisor import deterministic_decision
+from agents.supervisor import supervisor_agent
 from agents.sql_agent import Sql_agent
 from services.budget import TurnBudget, TurnBudgetExceeded, budget_scope, get_budget
 from services.llm import ResilientLLM
-from state.state import SpecialistResult, SupervisorState
+from state.state import PlanItem, SupervisorState
 from tests.conftest import make_config, make_sql_state
 
 
@@ -121,17 +121,20 @@ def test_exhausted_budget_short_circuits_before_build():
 def test_chart_route_survives_exhausted_budget():
     state = SupervisorState(
         messages=[HumanMessage(content="chart that")],
-        last_result=SpecialistResult(
-            source="sql",
-            summary="sales",
-            status="done",
-            structured_data=[{"label": "MENA", "value": 1200.5}],
-        ),
+        turn_count=1,
+        plan_ready=True,
+        plan=[
+            PlanItem(
+                route="sql",
+                task="sales",
+                status="done",
+                structured_data=[{"label": "MENA", "value": 1200.5}],
+            )
+        ],
     )
     with budget_scope(TurnBudget(max_calls=0, max_tokens=1, max_seconds=1)):
-        decision = deterministic_decision(state, [])
-    assert decision is not None
-    assert decision.next == "visu"
+        update = supervisor_agent(state, {"configurable": {}})
+    assert update["next"] == "visu"
 
 
 def test_no_scope_is_unlimited():
@@ -155,12 +158,11 @@ def test_scope_resets_after_exit():
     assert get_budget() is None
 
 
-def test_deterministic_decision_forces_end_when_budget_exhausted():
+def test_supervisor_ends_when_budget_exhausted_before_planning():
     state = SupervisorState(messages=[HumanMessage(content="hello")])
     with budget_scope(TurnBudget(max_calls=0, max_tokens=1, max_seconds=1)):
-        decision = deterministic_decision(state, [])
-    assert decision is not None
-    assert decision.next == "end"
+        update = supervisor_agent(state, {"configurable": {}})
+    assert update["next"] == "end"
 
 
 def test_sql_agent_degrades_gracefully_on_budget_exceeded(monkeypatch):

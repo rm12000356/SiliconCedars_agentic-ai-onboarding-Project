@@ -26,10 +26,7 @@ from agents.clarification import DEFAULT_QUESTION
 
 logger = logging.getLogger(__name__)
 
-MAX_HOPS_PER_TURN = 6
-MAX_SAME_ROUTE_PER_TURN = 2
 MAX_CLARIFICATIONS_PER_TURN = 1
-MAX_MULTI_INTENT_HOPS = 1
 MAX_PLAN_STEPS = 3
 
 
@@ -167,6 +164,17 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
     if state.plan_ready and state.last_result is not None:
         plan = _complete_current_step(plan, state.last_result)
 
+    # No budget left to plan anything: close the turn. If a plan already
+    # exists it still advances, so a deterministic visu step can render.
+    budget = get_budget()
+    if budget is not None and budget.exhausted() and not state.plan_ready:
+        logger.warning("turn_budget_exhausted_forcing_end")
+        update = map_to_state(_end_decision())
+        update["task_history"] = task_history
+        update["plan"] = plan
+        update["plan_ready"] = True
+        return update
+
     user_id = (config.get("configurable") or {}).get("user_id")
 
     if not state.plan_ready:
@@ -260,51 +268,6 @@ def _generate_clarification_question(decision: SupervisorDecision) -> str:
             extra={"error": f"{type(e).__name__}: {e}"},
         )
     return DEFAULT_QUESTION
-
-
-_QUESTION_WORD_RE = re.compile(
-    r"\b(how many|how much|what|which|who|where|when|why)\b",
-    re.IGNORECASE,
-)
-_MULTI_INTENT_SEPARATOR_RE = re.compile(r"(,|;|\band\b|\bthen\b|\balso\b)", re.IGNORECASE)
-
-
-def _has_multi_intent(state: SupervisorState) -> bool:
-    """Cheap check for two distinct asks in the latest user request.
-
-    Requires at least two question clauses so single-intent conjunctions
-    ("employees and departments") do not trigger an extra hop.
-    """
-    text = (latest_user_request(state.messages) or "").strip()
-    if not text:
-        return False
-    question_words = _QUESTION_WORD_RE.findall(text)
-    if len(question_words) < 2:
-        return False
-    return text.count("?") >= 2 or bool(_MULTI_INTENT_SEPARATOR_RE.search(text))
-
-
-def _should_allow_multi_intent_hop(state: SupervisorState) -> bool:
-    lr = state.last_result
-    return (
-        lr is not None
-        and lr.status == "done"
-        and state.multi_intent_hops < MAX_MULTI_INTENT_HOPS
-        and _has_multi_intent(state)
-    )
-
-
-def _failure_explanation(result: SpecialistResult) -> str:
-    """A user-safe limitation string for the convo agent.
-
-    Prefers the specialist's synthesized summary and never includes the raw
-    issue detail (which can contain database/provider errors).
-    """
-    summary = (result.summary or "").strip()
-    if summary:
-        return summary[:300]
-    code = (result.issue or "").split(":", 1)[0].strip()
-    return code or "the specialist could not complete the request"
 
 
 def build_planning_prompt(context: dict) -> list:
@@ -450,108 +413,6 @@ def _next_plan_decision(plan: list[PlanItem]) -> SupervisorDecision:
     return _end_decision()
 
 
-def deterministic_decision(
-    state: SupervisorState,
-    task_history: list[TaskRecord],
-) -> Optional[SupervisorDecision]:
-    current_turn = get_current_turn(state)
-    turn_history = [r for r in task_history if r.turn == current_turn]
-    lr: Optional[SpecialistResult] = state.last_result
-
-    if len(turn_history) >= MAX_HOPS_PER_TURN:
-        logger.warning(
-            "hop_limit_reached",
-            extra={"limit": MAX_HOPS_PER_TURN, "turn": current_turn},
-        )
-        return _end_decision()
-
-    if (
-        lr is not None
-        and lr.status == "done"
-        and lr.structured_data
-        and _user_wants_visualization(state)
-    ):
-        logger.debug("structured_data_plus_visualization_intent")
-        return SupervisorDecision(
-            next="visu",
-            current_task="Create a clear chart from the structured_data of the previous result."
-        )
-
-    budget = get_budget()
-    if budget is not None and budget.exhausted():
-        logger.warning("turn_budget_exhausted_forcing_end")
-        return _end_decision()
-
-    if lr is not None:
-        # Normal success → force end, unless this is a multi-part request with
-        # an unused bounded hop (then let the LLM route the remaining part).
-        if lr.status == "done":
-            if _should_allow_multi_intent_hop(state):
-                logger.debug("multi_intent_allowing_extra_hop")
-                return None
-            logger.debug("last_result_done_forcing_end")
-            return _end_decision()
-        
-
-        if lr.source == "rag" and lr.issue == "rag_unavailable":
-            return SupervisorDecision(
-                next="convo",
-                current_task="Tell the user internal search is temporarily unavailable. Do not invent an answer.",
-            )
-        
-        if lr.issue == "permission_denied":
-            already_explained = any(
-                r.route == "convo" and r.status == "done" for r in turn_history
-            )
-            if already_explained:
-                logger.debug("permission_denied_already_explained")
-                return _end_decision()
-
-            logger.debug("permission_denied_routing_to_convo")
-            return SupervisorDecision(
-                next="convo",
-                current_task=(
-                    "Explain the permission restriction clearly and stop. "
-                    "Do not offer alternatives that require the same data."
-                ),
-            )
-
-        if lr.source == "rag" and lr.issue == "no_matching_documents":
-            logger.debug("rag_no_matching_documents")
-            return SupervisorDecision(
-                next="convo",
-                current_task=(
-                    "Tell the user no internal documents matched this request and stop. "
-                    "Do not invent external research."
-                ),
-            )
-
-        same_route_failures = [
-            r for r in turn_history
-            if r.route == lr.source and r.status in ("partial", "failed")
-        ]
-        # The failure just recorded is always the last matching record, so drop
-        # it: the first failure returns residual to the LLM (one retry) and
-        # only a repeat failure routes to convo.
-        prior_failures = same_route_failures[:-1]
-        if prior_failures:
-            reason = _failure_explanation(lr)
-            logger.debug("route_already_failed_or_partial", extra={"route": lr.source})
-            return SupervisorDecision(
-                next="convo",
-                current_task=(
-                    f"Explain that the {lr.source} specialist could not fully "
-                    f"answer. The reason reported was: {reason}. "
-                    f"Do not invent details. Then stop."
-                ),
-            )
-
-    if not state.messages:
-        return _end_decision()
-
-    return None  # residual → LLM
-
-
 _CHART_TYPE = r"(?:bar|pie|line|scatter|histogram|donut|doughnut)"
 
 # Phrases that mention chart vocabulary but are not visualization requests.
@@ -614,57 +475,6 @@ def _user_wants_visualization(state: SupervisorState) -> bool:
         return bool(_CHART_HARD_RE.search(text))
 
     return bool(_CHART_INTENT_RE.search(text))
-
-
-def post_decision_guards(
-    state: SupervisorState,
-    decision: SupervisorDecision,
-    task_history: list[TaskRecord],
-) -> SupervisorDecision:
-    current_turn = get_current_turn(state)
-    turn_history = [r for r in task_history if r.turn == current_turn]
-
-    # Cap same route per turn
-    if decision.next in ("rag", "sql", "research", "visu", "convo"):
-        same_route_count = sum(1 for r in turn_history if r.route == decision.next)
-        if same_route_count >= MAX_SAME_ROUTE_PER_TURN:
-            logger.warning(
-                "same_route_cap_hit",
-                extra={"route": decision.next, "cap": MAX_SAME_ROUTE_PER_TURN},
-            )
-            return _end_decision()
-
-    if (
-        state.last_result
-        and state.last_result.status == "done"
-        and decision.next == state.last_result.source
-    ):
-        logger.warning(
-            "refused_reroute_to_finished_specialist",
-            extra={"route": decision.next},
-        )
-        return _end_decision()
-
-    # Only one clarification attempt per turn
-    if decision.next == "clarification":
-        if state.clarification_count >= MAX_CLARIFICATIONS_PER_TURN:
-            logger.warning(
-                "clarification_cap_hit",
-                extra={"count": state.clarification_count,
-                       "cap": MAX_CLARIFICATIONS_PER_TURN},
-            )
-            # Route to convo, not end, so the user still gets a reply.
-            return SupervisorDecision(
-                next="convo",
-                current_task=(
-                    "The request is still unclear after asking for clarification. "
-                    "Tell the user plainly that you could not determine what they "
-                    "need, and ask them to rephrase with more specifics. "
-                    "Do not invent an answer."
-                ),
-            )
-
-    return decision
 
 
 def gather_context(
