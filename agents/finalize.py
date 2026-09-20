@@ -10,9 +10,12 @@ from services.memory import write_fact
 
 logger = logging.getLogger(__name__)
 
+# Explicit durable-memory intent only. Bare "i'm"/"i am" triggered an
+# extraction call on almost every message, including untrusted content.
 IDENTITY_HINTS = [
-    "my name is", "i'm ", "i am ", "call me", "i prefer", "i like",
-    "please always", "in the future", "i work in", "i'm from",
+    "my name is", "call me", "remember that", "please remember",
+    "i prefer", "i like", "please always", "in the future",
+    "i work in", "i'm from", "i am from", "note that i",
 ]
 
 NO_ANSWER_FALLBACK = (

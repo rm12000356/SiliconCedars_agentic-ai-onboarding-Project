@@ -1,7 +1,12 @@
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 
-from agents.finalize import Finalize, NO_ANSWER_FALLBACK, OUTAGE_MESSAGE
+from agents.finalize import (
+    Finalize,
+    NO_ANSWER_FALLBACK,
+    OUTAGE_MESSAGE,
+    _might_contain_memorable_info,
+)
 from state.state import SpecialistResult, SupervisorState
 
 
@@ -73,3 +78,11 @@ def test_outage_emits_static_message_without_llm(monkeypatch):
 
     assert update["messages"][0].content == OUTAGE_MESSAGE
     assert update["last_result"] is None
+
+
+def test_bare_im_does_not_trigger_memory_extraction():
+    assert not _might_contain_memorable_info("I'm happy with the sales numbers.")
+
+
+def test_explicit_memory_intent_triggers_extraction():
+    assert _might_contain_memorable_info("Remember that I prefer bar charts.")
