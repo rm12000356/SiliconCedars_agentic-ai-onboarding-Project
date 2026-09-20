@@ -13,9 +13,13 @@ from langchain_core.messages import HumanMessage
 
 import pytest
 
-from agents.supervisor import gather_context, get_supervisor_decision
+from agents.supervisor import (
+    gather_context,
+    get_supervisor_decision,
+    get_workflow_plan,
+)
 from services.llm import llm
-from state.state import SpecialistResult, SupervisorState
+from state.state import SupervisorState
 
 from tests.conftest import requires_llm
 
@@ -238,26 +242,27 @@ def test_llm_routes_clarification_prompts():
     _assert_precision(CLARIFICATION_CASES, "clarification", MIN_ACCURACY["clarification"])
 
 
-def test_llm_routes_remaining_part_of_multi_intent():
+def _plan_routes(prompt: str) -> list[str]:
     state = SupervisorState(
-        messages=[
-            HumanMessage(
-                content=(
-                    "How many employees are there, and what does the remote "
-                    "work policy say?"
-                )
-            )
-        ],
-        last_result=SpecialistResult(
-            source="sql", summary="There are 2 employees.", status="done"
-        ),
-        current_task="count employees",
+        messages=[HumanMessage(content=prompt)],
         turn_count=1,
-        multi_intent_hops=0,
     )
     context = gather_context(state, task_history=[], user_id=None)
+    return [item.route for item in get_workflow_plan(context, llm())]
 
-    decision = get_supervisor_decision(context, llm())
 
-    assert decision is not None
-    assert decision.next == "rag"
+def test_llm_planner_decomposes_multi_intent():
+    routes = _plan_routes(
+        "How many employees are there, and what does the remote work policy say?"
+    )
+    assert routes == ["sql", "rag"]
+
+
+def test_llm_planner_decomposes_chart_request():
+    routes = _plan_routes("Show sales by region as a pie chart.")
+    assert routes == ["sql", "visu"]
+
+
+def test_llm_planner_single_intent():
+    routes = _plan_routes("What is the company remote work policy?")
+    assert routes == ["rag"]

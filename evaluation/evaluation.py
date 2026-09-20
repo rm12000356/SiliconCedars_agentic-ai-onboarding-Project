@@ -77,9 +77,15 @@ def routing_target_fn(graph, thread_prefix: str, inputs: dict) -> dict:
     interrupted = "__interrupt__" in result
 
     state = graph.get_state(config)
-    task_history = state.values.get("task_history", [])
-    current_turn = state.values.get("turn_count", 1)
-    routes_taken = [r.route for r in task_history if r.turn == current_turn]
+    plan = state.values.get("plan", [])
+    routes_taken = [
+        item.route for item in plan if item.status in ("done", "failed")
+    ]
+    if not routes_taken:
+        # Fallback for turns that ran without a plan (e.g. planner outage).
+        task_history = state.values.get("task_history", [])
+        current_turn = state.values.get("turn_count", 1)
+        routes_taken = [r.route for r in task_history if r.turn == current_turn]
 
     final_response = None
     if not interrupted:
