@@ -5,7 +5,7 @@ import typing
 from pydantic import BaseModel
 
 from services.memory import _CHECKPOINT_ALLOWED_TYPES, _CHECKPOINT_SERDE
-from state.state import SpecialistResult, SupervisorState, TaskRecord
+from state.state import PlanItem, SpecialistResult, SupervisorState, TaskRecord
 
 
 def _base_models(annotation) -> set[type[BaseModel]]:
@@ -57,6 +57,12 @@ def test_typed_roundtrip_preserves_custom_models():
                 result_summary="found policy text",
             )
         ],
+        PlanItem(
+            route="sql",
+            task="count employees",
+            status="done",
+            result_summary="2",
+        ),
     ]
 
     for value in values:

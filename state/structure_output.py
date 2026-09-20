@@ -1,5 +1,30 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 from state.state import MainRoute
+
+PlanRoute = Literal["rag", "convo", "sql", "research", "visu", "clarification"]
+
+
+class PlanStep(BaseModel):
+    route: PlanRoute = Field(
+        description="Specialist that should run this step of the workflow."
+    )
+    task: str = Field(
+        description="Concise, self-contained task for that specialist."
+    )
+
+
+class WorkflowPlan(BaseModel):
+    """The LLM's up-front decomposition of the user's request into an ordered
+    workflow. Execution is deterministic after this; the plan is not re-derived
+    after each hop."""
+
+    steps: list[PlanStep] = Field(
+        default_factory=list,
+        description="Ordered steps. One step for a single-intent request; a "
+                    "clarification step alone when the request is unclear.",
+    )
 
 
 class SupervisorDecision(BaseModel):

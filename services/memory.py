@@ -12,11 +12,11 @@ from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from db.connection import get_elevated_connection
 from dotenv import load_dotenv
 
-from state.state import SpecialistResult, TaskRecord
+from state.state import PlanItem, SpecialistResult, TaskRecord
 
 load_dotenv()
 
-_CHECKPOINT_ALLOWED_TYPES = [TaskRecord, SpecialistResult]
+_CHECKPOINT_ALLOWED_TYPES = [TaskRecord, SpecialistResult, PlanItem]
 
 _CHECKPOINT_SERDE = JsonPlusSerializer(
     allowed_msgpack_modules=_CHECKPOINT_ALLOWED_TYPES,

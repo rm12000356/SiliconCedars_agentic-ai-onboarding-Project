@@ -81,6 +81,32 @@ class TaskRecord(BaseModel):
 
 
 
+class PlanItem(BaseModel):
+    """One step of the up-front workflow plan.
+
+    The supervisor's LLM decomposes the request into steps once per turn;
+    execution then advances deterministically and writes each step's result
+    back here, so Finalize can combine every completed result.
+    """
+
+    route: SpecialistRoute = Field(description="Specialist that runs this step")
+    task: str = Field(description="Concrete task for that specialist")
+    status: Literal["pending", "done", "failed", "skipped"] = Field(
+        default="pending",
+        description="Execution status of this plan step.",
+    )
+    result_summary: Optional[str] = Field(
+        default=None, description="The step's synthesized result, if it ran."
+    )
+    issue: Optional[str] = Field(
+        default=None, description="Structured issue code if the step failed."
+    )
+    structured_data: Optional[list[dict]] = Field(
+        default=None,
+        description="Chartable label/value rows, when the step produced them.",
+    )
+
+
 class SupervisorState(BaseModel):
     messages: Annotated[List[AnyMessage], add_messages] = Field(
         description="Full conversation history; specialists get a filtered slice "
@@ -103,6 +129,16 @@ class SupervisorState(BaseModel):
     task_history: List[TaskRecord] = Field(
         default_factory=list,
         description="Specialist invocations so far: the concrete task and its outcome."
+    )
+    plan: List[PlanItem] = Field(
+        default_factory=list,
+        description="Up-front workflow plan for the turn; each item accumulates "
+                    "its own result. Reset by memory_manager."
+    )
+    plan_ready: bool = Field(
+        default=False,
+        description="True once the planner has produced this turn's plan; "
+                    "cleared on clarification resume and each new turn."
     )
     turn_count: int = Field(
         default=0,
