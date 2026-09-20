@@ -5,6 +5,7 @@ from langchain_core.runnables import RunnableConfig
 from state.state import FactExtraction
 from state.state import SupervisorState
 from services.llm import llm
+from services.budget import get_budget
 from services.memory import write_fact
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,15 @@ def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
     user_id = (config.get("configurable") or {}).get("user_id")
     latest_human = _latest_human_message(state.messages)
 
-    if user_id and latest_human and _might_contain_memorable_info(latest_human):
+    budget = get_budget()
+    budget_spent = budget is not None and budget.exhausted()
+
+    if (
+        user_id
+        and latest_human
+        and _might_contain_memorable_info(latest_human)
+        and not budget_spent
+    ):
         try:
             extractor = llm().with_structured_output(FactExtraction)
             extraction = extractor.invoke([

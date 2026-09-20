@@ -3,6 +3,8 @@ import logging
 import os
 from typing import Any, Optional, cast
 import atexit
+import psycopg
+from psycopg_pool import PoolTimeout
 import chainlit as cl
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException
@@ -17,6 +19,7 @@ from services.memory import get_checkpointer
 from services.chart_storage import LocalChartStorage
 from graph.workflow import Main_WorkFlow, has_pending_interrupt
 from services.auth import authenticate
+from services.budget import budget_scope
 from services.logging_config import configure_logging
 
 load_dotenv()
@@ -170,22 +173,23 @@ async def main(message: cl.Message):
     try:
         snapshot = await asyncio.to_thread(graph.get_state, config)
         paused = has_pending_interrupt(snapshot)
-    except Exception:
+    except (RuntimeError, ValueError, psycopg.Error, PoolTimeout):
         logger.warning(
             "get_state failed; assuming no pending interrupt", exc_info=True
         )
         paused = False
 
-    if paused:
-        result = await asyncio.to_thread(
-            graph.invoke, Command(resume=message.content), config
-        )
-    else:
-        result = await asyncio.to_thread(
-            graph.invoke,
-            cast(Any, {"messages": [HumanMessage(content=message.content)]}),
-            config,
-        )
+    with budget_scope():
+        if paused:
+            result = await asyncio.to_thread(
+                graph.invoke, Command(resume=message.content), config
+            )
+        else:
+            result = await asyncio.to_thread(
+                graph.invoke,
+                cast(Any, {"messages": [HumanMessage(content=message.content)]}),
+                config,
+            )
 
     interrupts = result.get("__interrupt__")
 

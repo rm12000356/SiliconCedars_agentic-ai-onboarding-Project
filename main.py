@@ -7,6 +7,7 @@ from evaluation.evaluation import run_routing_evaluation, run_rag_evaluation
 from graph.workflow import Main_WorkFlow
 from agents.clarification import resume_clarification
 from services.memory import get_checkpointer
+from services.budget import budget_scope
 from services.logging_config import configure_logging
 
 
@@ -50,21 +51,22 @@ def run():
                 print("\nEvaluations complete. Check LangSmith for full results.")
                 continue
 
-            result = graph.invoke(
-                {"messages": [HumanMessage(content=user_input)]},
-                config=config,
-            )
-
-            while "__interrupt__" in result:
-                interrupt_payload = result["__interrupt__"][0].value
-                question = interrupt_payload["question"]
-                answer = input(f"\n{question}\nYou: ").strip()
-                result = resume_clarification(
-                    graph,
-                    thread_id,
-                    answer,
-                    config,
+            with budget_scope():
+                result = graph.invoke(
+                    {"messages": [HumanMessage(content=user_input)]},
+                    config=config,
                 )
+
+                while "__interrupt__" in result:
+                    interrupt_payload = result["__interrupt__"][0].value
+                    question = interrupt_payload["question"]
+                    answer = input(f"\n{question}\nYou: ").strip()
+                    result = resume_clarification(
+                        graph,
+                        thread_id,
+                        answer,
+                        config,
+                    )
 
             messages = result.get("messages") or []
             if messages:

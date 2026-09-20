@@ -1,4 +1,9 @@
+import logging
+
 from state.state import SupervisorState, SubGraphSupervisorState, SpecialistResult
+from services.budget import TurnBudgetExceeded
+
+logger = logging.getLogger(__name__)
 
 
 def make_research_node(subgraph):
@@ -23,7 +28,21 @@ def make_research_node(subgraph):
             task=state.current_task,
         )
 
-        sub_output = subgraph.invoke(sub_input)
+        try:
+            sub_output = subgraph.invoke(sub_input)
+        except TurnBudgetExceeded as e:
+            logger.warning("research_turn_budget_exceeded", extra={"error": str(e)})
+            return {
+                "last_result": SpecialistResult(
+                    source="research",
+                    summary=(
+                        "This request could not be completed within the allowed "
+                        "budget for a single turn."
+                    ),
+                    status="failed",
+                    issue="budget_exceeded",
+                )
+            }
 
         succeeded = sub_output.get("research_succeeded")
         research_messages = sub_output.get("research_messages") or []

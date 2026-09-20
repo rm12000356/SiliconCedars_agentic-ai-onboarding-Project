@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 
 from state.state import SupervisorState, SpecialistResult, ChartSpec
 from services.llm import llm
+from services.budget import TurnBudgetExceeded
 from services.message_utils import clarification_answers, latest_user_request
 
 OUTPUT_DIR = Path("outputs")
@@ -96,6 +97,15 @@ def Visualization(state: SupervisorState) -> dict:
             ),
             "chart_path": str(filepath),
         }
+
+    except TurnBudgetExceeded as exc:
+        logger.warning("[VISU] turn budget exceeded: %s", exc)
+
+        return _failed_result(
+            "This request could not be completed within the allowed budget "
+            "for a single turn.",
+            "budget_exceeded",
+        )
 
     except ValueError as exc:
         logger.warning("[VISU] validation failure: %s", exc)

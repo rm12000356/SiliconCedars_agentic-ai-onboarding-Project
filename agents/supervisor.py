@@ -17,6 +17,7 @@ from services.message_utils import (
 from services.llm import llm
 from services.memory import format_facts_for_prompt
 from services.errors import classify_llm_error
+from services.budget import get_budget, TurnBudgetExceeded
 from agents.clarification import DEFAULT_QUESTION
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,11 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
         try:
             context = gather_context(state, task_history, user_id)
             decision = get_supervisor_decision(context, llm())
+        except TurnBudgetExceeded as e:
+            # The turn is over budget: stop making decisions and let Finalize
+            # close out using whatever the specialists already produced.
+            logger.warning("supervisor_turn_budget_exceeded", extra={"error": str(e)})
+            decision = _end_decision()
         except Exception as e:
             raise RuntimeError(f"Supervisor LLM call failed: {e}") from e
 
@@ -160,6 +166,8 @@ def _generate_clarification_question(decision: SupervisorDecision) -> str:
         question = (result.question or "").strip()
         if question:
             return question
+    # Best-effort: any generation failure (provider, schema, budget) falls
+    # back to the canned question rather than breaking the turn.
     except Exception as e:
         logger.warning(
             "clarification_question_generation_failed",
@@ -183,18 +191,24 @@ def deterministic_decision(
         )
         return _end_decision()
 
-    if lr is not None:
-        if (
-            lr.status == "done"
-            and lr.structured_data
-            and _user_wants_visualization(state)
-        ):
-            logger.debug("structured_data_plus_visualization_intent")
-            return SupervisorDecision(
-                next="visu",
-                current_task="Create a clear chart from the structured_data of the previous result."
-            )
+    if (
+        lr is not None
+        and lr.status == "done"
+        and lr.structured_data
+        and _user_wants_visualization(state)
+    ):
+        logger.debug("structured_data_plus_visualization_intent")
+        return SupervisorDecision(
+            next="visu",
+            current_task="Create a clear chart from the structured_data of the previous result."
+        )
 
+    budget = get_budget()
+    if budget is not None and budget.exhausted():
+        logger.warning("turn_budget_exhausted_forcing_end")
+        return _end_decision()
+
+    if lr is not None:
         # Normal success → force end (prevents loops)
         if lr.status == "done":
             logger.debug("last_result_done_forcing_end")
@@ -379,6 +393,8 @@ def gather_context(
     if user_id:
         try:
             known_facts = format_facts_for_prompt(user_id)
+        # Long-term memory is an enhancement; a DB failure must not block
+        # routing, so this deliberately degrades instead of narrowing.
         except Exception as e:
             logger.warning(
                 "known_facts_lookup_failed_continuing_without_it",
@@ -463,6 +479,9 @@ def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> Opti
                 structured = model.with_structured_output(SupervisorDecision, method=method)
                 raw = structured.invoke(prompt)
                 return SupervisorDecision.model_validate(raw)
+            except TurnBudgetExceeded:
+                # Not a schema/provider failure: don't retry, don't classify.
+                raise
             except Exception as e:
                 errors.append(f"{method}: {e}")
                 classes.append(classify_llm_error(e))
