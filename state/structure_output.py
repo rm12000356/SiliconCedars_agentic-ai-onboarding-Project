@@ -1,9 +1,5 @@
-from typing import Literal
-
 from pydantic import BaseModel, Field
-from state.state import MainRoute
-
-PlanRoute = Literal["rag", "convo", "sql", "research", "visu", "clarification"]
+from state.state import MainRoute, PlanRoute
 
 
 class PlanStep(BaseModel):
