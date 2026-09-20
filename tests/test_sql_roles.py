@@ -24,3 +24,21 @@ def test_general_role_cannot_see_salaries_in_metadata():
             row = cur.fetchone()
             assert row is None, "salaries table should be invisible to general_role, but it was found"
             print("Confirmed: salaries is invisible to general_role")
+
+
+def test_general_query_rejects_ddl_and_temp_tables():
+    from tools.database import run_general_query
+
+    with pytest.raises(Exception):
+        run_general_query.invoke(
+            {"query_text": "CREATE TEMP TABLE p0_temp_probe (x int)"}
+        )
+
+
+def test_general_query_rejects_oversized_result():
+    from tools.database import run_general_query
+
+    with pytest.raises(Exception):
+        run_general_query.invoke(
+            {"query_text": "SELECT generate_series(1, 100000)"}
+        )
