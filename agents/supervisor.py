@@ -7,8 +7,12 @@ from typing import Optional
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 
-from state.state import SupervisorState, TaskRecord, SpecialistResult
-from state.structure_output import SupervisorDecision, ClarificationOutput
+from state.state import SupervisorState, TaskRecord, SpecialistResult, PlanItem
+from state.structure_output import (
+    SupervisorDecision,
+    ClarificationOutput,
+    WorkflowPlan,
+)
 from services.message_utils import (
     clarification_answers,
     latest_user_request,
@@ -26,6 +30,7 @@ MAX_HOPS_PER_TURN = 6
 MAX_SAME_ROUTE_PER_TURN = 2
 MAX_CLARIFICATIONS_PER_TURN = 1
 MAX_MULTI_INTENT_HOPS = 1
+MAX_PLAN_STEPS = 3
 
 
 def _end_decision() -> SupervisorDecision:
@@ -82,6 +87,41 @@ Decide by where the answer comes from:
 
 """
 
+PLANNER_SYSTEM_PROMPT = """You are the planning supervisor for a company intelligence assistant.
+
+Decompose the latest user request into an ordered workflow of specialist steps. You are called ONCE per request; execution is then deterministic, so the plan must be complete and correctly ordered.
+
+### Available steps
+- sql: live structured data from the operational database — counts, sums, lists, a named person's department/salary, a sale row, a credential row.
+- rag: internal company documents, policies, procedures, lessons-learned.
+- research: external/public information, including current or time-sensitive facts.
+- visu: build a chart from data a previous sql step produced. Include it as a step after sql when the user asks for a chart/graph/plot.
+- convo: answer directly (greetings, definitions, small talk, light synthesis).
+- clarification: the request is genuinely unclear. Use this as the ONLY step.
+
+### Rules
+- One step per distinct ask, in the order they should run.
+- A single-intent request has exactly one step.
+- A two-part request ("how many employees, and what does the policy say?") has two steps: sql then rag.
+- A chart over database data is two steps: sql then visu.
+- Prefer rag over research for company-internal topics.
+- Current/latest external facts (current CEO, latest price, today's weather, recent news) → research.
+- "What did we learn about ..." or "what does the policy say" → rag, even if the topic names a table.
+- Do not include an "end" step.
+- Keep each task concise, self-contained, and actionable.
+- Maximum 3 steps.
+
+### Examples
+- "How many employees are there?" → [sql]
+- "What is the company remote work policy?" → [rag]
+- "Who is the current CEO of OpenAI?" → [research]
+- "Hello" → [convo]
+- "How many employees are there, and what does the remote work policy say?" → [sql, rag]
+- "Show sales by region as a pie chart." → [sql, visu]
+- "What did we learn about SQL security from past projects?" → [rag]
+- "Tell me about the numbers." → [clarification]
+"""
+
 _OUTAGE_TASK = (
     "Explain that the assistant is temporarily unavailable due to a service "
     "issue, not because the request was unclear. Ask them to try again later. "
@@ -119,55 +159,80 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
             },
         )
 
-    decision = deterministic_decision(state, task_history)
-
+    plan = [item.model_copy() for item in state.plan]
     outage = False
-    multi_intent_hop = decision is None and _should_allow_multi_intent_hop(state)
 
-    if decision is None:
-        user_id = (config.get("configurable") or {}).get("user_id")
+    # Write the step we just routed to (the first pending item) back into the
+    # plan, then advance deterministically. No per-hop LLM routing.
+    if state.plan_ready and state.last_result is not None:
+        plan = _complete_current_step(plan, state.last_result)
+
+    user_id = (config.get("configurable") or {}).get("user_id")
+
+    if not state.plan_ready:
         try:
             context = gather_context(state, task_history, user_id)
-            decision = get_supervisor_decision(context, llm())
+            plan = get_workflow_plan(context, llm())
         except LLMOutageError as e:
-            # No provider is usable. End deterministically; routing to an
-            # agent would need the same dead LLM and crash the turn.
             logger.warning("supervisor_outage_ending_turn", extra={"kind": str(e)})
             outage = True
-            decision = _end_decision()
+            plan = []
         except TurnBudgetExceeded as e:
-            # The turn is over budget: stop making decisions and let Finalize
-            # close out using whatever the specialists already produced.
             logger.warning("supervisor_turn_budget_exceeded", extra={"error": str(e)})
-            decision = _end_decision()
+            plan = []
         except Exception as e:
-            raise RuntimeError(f"Supervisor LLM call failed: {e}") from e
+            logger.warning(
+                "workflow_planning_failed_falling_back",
+                extra={"error": f"{type(e).__name__}: {e}"},
+            )
+            plan = []
 
-    if decision is None:
-        request = latest_user_request(state.messages) or ""
-        if mentions_sensitive_data(request):
-            decision = SupervisorDecision(next="sql", current_task=request)
-        else:
-            decision = SupervisorDecision(next="convo", current_task=_OUTAGE_TASK)
+        if not plan and not outage:
+            # Fallback: one single-decision LLM call, stored as a one-step plan.
+            fallback: Optional[SupervisorDecision] = None
+            try:
+                context = gather_context(state, task_history, user_id)
+                fallback = get_supervisor_decision(context, llm())
+            except LLMOutageError as e:
+                logger.warning("supervisor_outage_ending_turn", extra={"kind": str(e)})
+                outage = True
+            except TurnBudgetExceeded as e:
+                logger.warning("supervisor_turn_budget_exceeded", extra={"error": str(e)})
 
-    decision = post_decision_guards(state, decision, task_history)
+            if fallback is not None and fallback.next != "end":
+                plan = [PlanItem(route=fallback.next, task=fallback.current_task)]
+            elif fallback is None and not outage:
+                request = latest_user_request(state.messages) or ""
+                if mentions_sensitive_data(request):
+                    plan = [PlanItem(route="sql", task=request)]
+                else:
+                    plan = [PlanItem(route="convo", task=_OUTAGE_TASK)]
+
+        plan = _apply_clarification_cap(plan, state)
+
+    plan = _maybe_insert_visu(plan, state)
+
+    decision = _end_decision() if outage else _next_plan_decision(plan)
 
     logger.debug(
         "final_decision",
-        extra={"next": decision.next, "current_task": decision.current_task},
+        extra={
+            "next": decision.next,
+            "current_task": decision.current_task,
+            "plan": [(item.route, item.status) for item in plan],
+        },
     )
 
     update = map_to_state(decision)
     update["task_history"] = task_history
+    update["plan"] = plan
+    update["plan_ready"] = True
 
     if decision.next == "clarification":
         update["clarification_question"] = _generate_clarification_question(decision)
 
     if outage:
         update["outage"] = True
-
-    if multi_intent_hop:
-        update["multi_intent_hops"] = state.multi_intent_hops + 1
 
     return update
 
@@ -240,6 +305,149 @@ def _failure_explanation(result: SpecialistResult) -> str:
         return summary[:300]
     code = (result.issue or "").split(":", 1)[0].strip()
     return code or "the specialist could not complete the request"
+
+
+def build_planning_prompt(context: dict) -> list:
+    messages = [SystemMessage(content=PLANNER_SYSTEM_PROMPT)]
+
+    if context.get("conversation_summary"):
+        messages.append(
+            SystemMessage(
+                content=f"[Summary of earlier conversation]: "
+                        f"{context['conversation_summary']}"
+            )
+        )
+
+    if context.get("known_facts"):
+        messages.append(SystemMessage(content=context["known_facts"]))
+
+    messages.extend(context["messages"][-6:])
+    return messages
+
+
+def _plan_from_workflow(workflow: WorkflowPlan) -> list[PlanItem]:
+    steps = list(workflow.steps)[:MAX_PLAN_STEPS]
+
+    clarification = next((s for s in steps if s.route == "clarification"), None)
+    if clarification is not None:
+        return [
+            PlanItem(
+                route="clarification",
+                task=clarification.task or "The request was unclear.",
+            )
+        ]
+
+    return [
+        PlanItem(route=step.route, task=step.task)
+        for step in steps
+        if step.task and step.task.strip()
+    ]
+
+
+def get_workflow_plan(context: dict, model, max_attempts: int = 2) -> list[PlanItem]:
+    """One LLM call decomposes the request into an ordered plan.
+
+    Raises LLMOutageError when no provider is usable; returns [] on a schema
+    failure so the caller can fall back to a single decision.
+    """
+    last_class: str | None = None
+
+    for _attempt in range(1, max_attempts + 1):
+        classes: list[str | None] = []
+
+        for method in ("function_calling", "json_mode"):
+            try:
+                structured = model.with_structured_output(WorkflowPlan, method=method)
+                raw = structured.invoke(build_planning_prompt(context))
+                workflow = (
+                    raw if isinstance(raw, WorkflowPlan)
+                    else WorkflowPlan.model_validate(raw)
+                )
+                return _plan_from_workflow(workflow)
+            except TurnBudgetExceeded:
+                raise
+            except Exception as e:
+                classes.append(classify_llm_error(e))
+
+        last_class = (
+            "auth" if "auth" in classes
+            else "transient" if "transient" in classes
+            else None
+        )
+        if last_class in ("auth", "transient"):
+            break
+
+    if last_class == "auth":
+        logger.critical("planner_llm_outage")
+        raise LLMOutageError("auth")
+    if last_class == "transient":
+        logger.error("planner_llm_transient_outage")
+        raise LLMOutageError("transient")
+
+    logger.error("workflow_planning_failed")
+    return []
+
+
+def _complete_current_step(
+    plan: list[PlanItem], result: SpecialistResult
+) -> list[PlanItem]:
+    """Write the just-finished result into the first pending step."""
+    for item in plan:
+        if item.status == "pending":
+            item.status = "done" if result.status == "done" else "failed"
+            item.result_summary = result.summary
+            item.issue = result.issue
+            item.structured_data = result.structured_data
+            break
+    return plan
+
+
+def _apply_clarification_cap(
+    plan: list[PlanItem], state: SupervisorState
+) -> list[PlanItem]:
+    if state.clarification_count < MAX_CLARIFICATIONS_PER_TURN:
+        return plan
+    for item in plan:
+        if item.route == "clarification":
+            item.route = "convo"
+            item.task = (
+                "The request is still unclear after asking for clarification. "
+                "Tell the user plainly that you could not determine what they "
+                "need, and ask them to rephrase with more specifics. "
+                "Do not invent an answer."
+            )
+    return plan
+
+
+def _maybe_insert_visu(
+    plan: list[PlanItem], state: SupervisorState
+) -> list[PlanItem]:
+    if any(item.route == "visu" and item.status == "pending" for item in plan):
+        return plan
+    if not _user_wants_visualization(state):
+        return plan
+    has_rows = any(
+        item.route == "sql" and item.status == "done" and item.structured_data
+        for item in plan
+    )
+    if has_rows:
+        plan.append(
+            PlanItem(
+                route="visu",
+                task=(
+                    "Create a clear chart from the structured_data of the "
+                    "previous result."
+                ),
+            )
+        )
+    return plan
+
+
+def _next_plan_decision(plan: list[PlanItem]) -> SupervisorDecision:
+    for item in plan:
+        if item.status == "pending":
+            return SupervisorDecision(next=item.route, current_task=item.task)
+    return _end_decision()
 
 
 def deterministic_decision(

@@ -14,14 +14,18 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from agents.supervisor import (
     MAX_HOPS_PER_TURN,
+    MAX_PLAN_STEPS,
     deterministic_decision,
     get_supervisor_decision,
     post_decision_guards,
     supervisor_agent,
     _has_multi_intent,
+    _maybe_insert_visu,
+    _plan_from_workflow,
     _user_wants_visualization,
 )
-from state.state import SpecialistResult, SupervisorState, TaskRecord
+from state.structure_output import PlanStep, WorkflowPlan
+from state.state import PlanItem, SpecialistResult, SupervisorState, TaskRecord
 from state.structure_output import SupervisorDecision
 from services.errors import LLMOutageError
 from services.message_utils import CLARIFICATION_ANSWER_FLAG
@@ -325,6 +329,7 @@ def test_intent_ignores_bar_substring():
 
 
 def test_routing_failure_sensitive_routes_to_sql(monkeypatch):
+    monkeypatch.setattr("agents.supervisor.get_workflow_plan", lambda *a, **k: [])
     monkeypatch.setattr("agents.supervisor.get_supervisor_decision", lambda *a, **k: None)
     state = _state(text="What is Rami Noueihed's salary?", turn_count=1)
 
@@ -335,6 +340,7 @@ def test_routing_failure_sensitive_routes_to_sql(monkeypatch):
 
 
 def test_routing_failure_non_sensitive_routes_to_convo(monkeypatch):
+    monkeypatch.setattr("agents.supervisor.get_workflow_plan", lambda *a, **k: [])
     monkeypatch.setattr("agents.supervisor.get_supervisor_decision", lambda *a, **k: None)
     state = _state(text="Tell me something interesting.", turn_count=1)
 
@@ -402,11 +408,14 @@ def test_multi_intent_done_ends_when_hop_used():
     assert decision.next == "end"
 
 
-def test_supervisor_agent_increments_multi_intent_hop(monkeypatch):
-    monkeypatch.setattr(
-        "agents.supervisor.get_supervisor_decision",
-        lambda *a, **k: SupervisorDecision(next="rag", current_task="policy"),
-    )
+def test_supervisor_agent_advances_plan_deterministically(monkeypatch):
+    """After the first step completes, the next planned step is forced without
+    any further LLM routing call."""
+    def boom(*_a, **_k):
+        raise AssertionError("no LLM routing call should happen mid-plan")
+
+    monkeypatch.setattr("agents.supervisor.llm", boom)
+
     lr = SpecialistResult(source="sql", summary="2 employees", status="done")
     state = SupervisorState(
         messages=[
@@ -417,20 +426,25 @@ def test_supervisor_agent_increments_multi_intent_hop(monkeypatch):
         last_result=lr,
         current_task="count employees",
         turn_count=1,
-        multi_intent_hops=0,
+        plan_ready=True,
+        plan=[
+            PlanItem(route="sql", task="count employees", status="pending"),
+            PlanItem(route="rag", task="remote work policy", status="pending"),
+        ],
     )
 
     update = supervisor_agent(state, {"configurable": {}})
 
     assert update["next"] == "rag"
-    assert update["multi_intent_hops"] == 1
+    assert update["plan"][0].status == "done"
+    assert update["plan"][1].status == "pending"
 
 
 def test_llm_outage_ends_turn_deterministically(monkeypatch):
     def outage(*_a, **_k):
         raise LLMOutageError("transient")
 
-    monkeypatch.setattr("agents.supervisor.get_supervisor_decision", outage)
+    monkeypatch.setattr("agents.supervisor.get_workflow_plan", outage)
     state = _state(text="Tell me something interesting.", turn_count=1)
 
     update = supervisor_agent(state, {"configurable": {}})
@@ -482,51 +496,6 @@ def test_refuse_reroute_to_just_finished_specialist():
     assert guarded.next == "end"
 
 
-def test_refused_reroute_reachable_after_multi_intent_hop(monkeypatch):
-    """The guard fires through the real node when a multi-intent turn lets the
-    LLM re-propose the specialist that just finished."""
-    monkeypatch.setattr(
-        "agents.supervisor.get_supervisor_decision",
-        lambda *a, **k: SupervisorDecision(next="sql", current_task="more sql"),
-    )
-    lr = SpecialistResult(source="sql", summary="2 employees", status="done")
-    state = SupervisorState(
-        messages=[
-            HumanMessage(
-                content="How many employees are there, and what does the policy say?"
-            )
-        ],
-        last_result=lr,
-        current_task="count employees",
-        turn_count=1,
-        multi_intent_hops=0,
-    )
-
-    update = supervisor_agent(state, {"configurable": {}})
-
-    assert update["next"] == "end"
-
-
-def test_permission_denied_already_explained_reachable_via_multi_hop():
-    """A second sensitive part after convo already explained permission ends."""
-    lr = SpecialistResult(
-        source="sql", summary="denied", status="failed", issue="permission_denied"
-    )
-    history = [_record(route="convo", task="explain restriction", status="done")]
-    state = SupervisorState(
-        messages=[HumanMessage(content="Show salaries, and show credentials.")],
-        last_result=lr,
-        current_task="credentials",
-        task_history=history,
-        turn_count=1,
-        multi_intent_hops=1,
-    )
-
-    update = supervisor_agent(state, {"configurable": {}})
-
-    assert update["next"] == "end"
-
-
 def test_first_clarification_in_same_turn_is_allowed():
     state = _state(text="still unclear", clarification_count=0)
     decision = SupervisorDecision(next="clarification", current_task="ask once")
@@ -539,6 +508,47 @@ def test_clarification_cap_routes_to_convo():
     decision = SupervisorDecision(next="clarification", current_task="ask again")
     guarded = post_decision_guards(state, decision, [])
     assert guarded.next == "convo"
+
+
+def test_plan_from_workflow_builds_ordered_steps():
+    workflow = WorkflowPlan(
+        steps=[
+            PlanStep(route="sql", task="count employees"),
+            PlanStep(route="rag", task="remote work policy"),
+        ]
+    )
+    plan = _plan_from_workflow(workflow)
+    assert [item.route for item in plan] == ["sql", "rag"]
+    assert all(item.status == "pending" for item in plan)
+
+
+def test_plan_from_workflow_clarification_is_alone():
+    workflow = WorkflowPlan(
+        steps=[
+            PlanStep(route="clarification", task="Which report?"),
+            PlanStep(route="sql", task="count"),
+        ]
+    )
+    plan = _plan_from_workflow(workflow)
+    assert [item.route for item in plan] == ["clarification"]
+
+
+def test_plan_from_workflow_caps_steps():
+    workflow = WorkflowPlan(
+        steps=[
+            PlanStep(route="sql", task=f"task {i}") for i in range(MAX_PLAN_STEPS + 2)
+        ]
+    )
+    assert len(_plan_from_workflow(workflow)) == MAX_PLAN_STEPS
+
+
+def test_maybe_insert_visu_adds_step_after_sql_rows():
+    state = _state(text="Make a bar chart of that", turn_count=1)
+    plan = [PlanItem(route="sql", task="sales", status="done", structured_data=[{"label": "a", "value": 1}])]
+
+    updated = _maybe_insert_visu(plan, state)
+
+    assert [item.route for item in updated] == ["sql", "visu"]
 
 
 def test_supervisor_agent_skips_llm_when_last_result_done(monkeypatch):
@@ -554,6 +564,9 @@ def test_supervisor_agent_skips_llm_when_last_result_done(monkeypatch):
         current_task="count employees",
         turn_count=1,
     )
+    state.plan_ready = True
+    state.plan = [PlanItem(route="sql", task="count employees", status="pending")]
+
     update = supervisor_agent(state, {"configurable": {}})
     assert update["next"] == "end"
     assert len(update["task_history"]) == 1
@@ -572,6 +585,9 @@ def test_supervisor_agent_auto_visu_skips_llm(monkeypatch):
         current_task="sales by region",
         turn_count=1,
     )
+    state.plan_ready = True
+    state.plan = [PlanItem(route="sql", task="sales by region", status="pending")]
+
     update = supervisor_agent(state, {"configurable": {}})
     assert update["next"] == "visu"
     assert "last_result" not in update

@@ -20,6 +20,14 @@ def Clarification(state: SupervisorState) -> dict:
     if not isinstance(answer, str):
         answer = str(answer)
 
+    # Mark the clarification step done and force a re-plan so the supervisor
+    # can use the answer (the plan may now have real steps).
+    plan = [item.model_copy() for item in state.plan]
+    for item in plan:
+        if item.status == "pending" and item.route == "clarification":
+            item.status = "done"
+            break
+
     return {
         "messages": [
             AIMessage(content=question),
@@ -32,6 +40,8 @@ def Clarification(state: SupervisorState) -> dict:
         "clarification_question": None,  
         "clarification_count": state.clarification_count + 1,
         "last_result": None,             
+        "plan": plan,
+        "plan_ready": False,
     }
 
 def resume_clarification(graph, thread_id: str, answer: str, config: RunnableConfig):
