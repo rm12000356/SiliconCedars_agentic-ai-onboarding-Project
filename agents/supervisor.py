@@ -187,6 +187,19 @@ def _generate_clarification_question(decision: SupervisorDecision) -> str:
     return DEFAULT_QUESTION
 
 
+def _failure_explanation(result: SpecialistResult) -> str:
+    """A user-safe limitation string for the convo agent.
+
+    Prefers the specialist's synthesized summary and never includes the raw
+    issue detail (which can contain database/provider errors).
+    """
+    summary = (result.summary or "").strip()
+    if summary:
+        return summary[:300]
+    code = (result.issue or "").split(":", 1)[0].strip()
+    return code or "the specialist could not complete the request"
+
+
 def deterministic_decision(
     state: SupervisorState,
     task_history: list[TaskRecord],
@@ -263,13 +276,19 @@ def deterministic_decision(
             r for r in turn_history
             if r.route == lr.source and r.status in ("partial", "failed")
         ]
-        if len(same_route_failures) >= 1:
+        # The failure just recorded is always the last matching record, so drop
+        # it: the first failure returns residual to the LLM (one retry) and
+        # only a repeat failure routes to convo.
+        prior_failures = same_route_failures[:-1]
+        if prior_failures:
+            reason = _failure_explanation(lr)
             logger.debug("route_already_failed_or_partial", extra={"route": lr.source})
             return SupervisorDecision(
                 next="convo",
                 current_task=(
-                    f"Explain that the {lr.source} specialist could not fully answer "
-                    f"and what the limitation was. Then stop."
+                    f"Explain that the {lr.source} specialist could not fully "
+                    f"answer. The reason reported was: {reason}. "
+                    f"Do not invent details. Then stop."
                 ),
             )
 

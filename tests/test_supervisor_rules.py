@@ -178,11 +178,42 @@ def test_rag_no_matching_documents_routes_convo():
 
 def test_same_specialist_already_failed_routes_convo():
     lr = SpecialistResult(source="sql", summary="could not finish", status="failed", issue="loop")
-    history = [_record(route="sql", task="query x", status="failed", issue="loop")]
+    history = [
+        _record(route="sql", task="query x", status="failed", issue="loop"),
+        _record(route="sql", task="query x", status="failed", issue="loop"),
+    ]
     state = _state(text="try again", last_result=lr, current_task="query x", task_history=history)
     decision = deterministic_decision(state, history)
     assert decision is not None
     assert decision.next == "convo"
+
+
+def test_first_failure_allows_one_retry_residual():
+    lr = SpecialistResult(
+        source="sql", summary="could not finish", status="failed", issue="invalid_request"
+    )
+    history = [_record(route="sql", task="query x", status="failed", issue="invalid_request")]
+    state = _state(text="try again", last_result=lr, current_task="query x", task_history=history)
+    assert deterministic_decision(state, history) is None
+
+
+def test_repeat_failure_convo_task_has_safe_reason():
+    lr = SpecialistResult(
+        source="sql",
+        summary="The requested data could not be found in the database.",
+        status="failed",
+        issue='table_or_schema_missing: relation "x" does not exist',
+    )
+    history = [
+        _record(route="sql", task="query x", status="failed", issue="loop"),
+        _record(route="sql", task="query x", status="failed", issue="loop"),
+    ]
+    state = _state(text="try again", last_result=lr, current_task="query x", task_history=history)
+    decision = deterministic_decision(state, history)
+    assert decision is not None
+    assert decision.next == "convo"
+    assert "could not be found" in decision.current_task
+    assert "does not exist" not in decision.current_task
 
 
 def test_user_wants_visualization_keywords():
