@@ -18,13 +18,12 @@ logger = logging.getLogger(__name__)
 
 PRIMARY_MODEL = "openai/gpt-oss-120b"
 
+# gpt-oss-safeguard-20b is a safety-classifier model and is not a tool-calling
+# model, so it must not be in the fallback chain.
 FALLBACK_MODELS = [
     "openai/gpt-oss-20b",
     "qwen/qwen3-32b",
-    "openai/gpt-oss-safeguard-20b",
 ]
-
-OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504, 529}
 NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 422}
@@ -153,7 +152,7 @@ class ResilientLLM:
         raise RuntimeError(
             "All configured LLM models failed. "
             f"Last error: {type(last_exc).__name__ if last_exc else '?'}: {last_exc}. "
-            "Check GROQ_API_KEY, OPENROUTER_API_KEY and model names."
+            "Check GROQ_API_KEY and model names."
         ) from last_exc
 
 
@@ -187,11 +186,11 @@ def llm(model: str | None = None) -> ResilientLLM:
             return ResilientLLM([(f"openrouter:{name}", lambda n=name: _make_openrouter(n))])
         return ResilientLLM([(f"groq:{model}", lambda m=model: _make_groq(m))])
     
+    # Groq only by default. OpenRouter is available via the explicit
+    # `llm(model="openrouter/...")` path, but is not part of the default chain
+    # so company data is not sent to a third-party free model.
     candidates: list[tuple[str, Callable[[], Any]]] = [
         (f"groq:{m}", (lambda m=m: _make_groq(m))) for m in [PRIMARY_MODEL] + FALLBACK_MODELS
     ]
-    candidates.append(
-        (f"openrouter:{OPENROUTER_MODEL}", lambda: _make_openrouter(OPENROUTER_MODEL))
-    )
 
     return ResilientLLM(candidates)
