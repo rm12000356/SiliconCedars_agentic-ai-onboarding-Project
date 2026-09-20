@@ -104,17 +104,26 @@ class ResilientLLM:
 
         for label, factory in self._candidates:
             if budget is not None:
-                budget.check_and_count()
+                # Stop before building anything if the turn is already spent.
+                budget.raise_if_exhausted()
 
             try:
                 client = self._build(factory)
             except Exception as e:
+                # Client construction can fail for many provider-specific
+                # reasons (missing key, bad model name, SDK errors); a failed
+                # candidate falls through without consuming budget because no
+                # provider was contacted.
                 logger.warning(
                     "[LLM] %s unavailable while constructing client: %s: %s",
                     label, type(e).__name__, e,
                 )
                 last_exc = e
                 continue
+
+            if budget is not None:
+                # Reserve only when a real provider call is about to happen.
+                budget.check_and_count()
 
             started = time.monotonic()
             try:

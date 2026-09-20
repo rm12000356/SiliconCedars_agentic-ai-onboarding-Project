@@ -81,8 +81,12 @@ class TurnBudget:
             return True
         return self.llm_seconds >= self.max_seconds
 
-    def check_and_count(self) -> None:
-        """Reserve one LLM call or raise if the turn is over budget."""
+    def raise_if_exhausted(self) -> None:
+        """Raise if no further call is allowed, without reserving one.
+
+        Used to short-circuit provider fallback before constructing a client,
+        so failed construction does not consume budget.
+        """
         if self.calls + 1 > self.max_calls:
             raise TurnBudgetExceeded("llm_call", self.max_calls, self.calls + 1)
         if self.tokens >= self.max_tokens:
@@ -91,6 +95,10 @@ class TurnBudget:
             raise TurnBudgetExceeded(
                 "wall_clock", self.max_seconds, self.llm_seconds
             )
+
+    def check_and_count(self) -> None:
+        """Reserve one LLM call or raise if the turn is over budget."""
+        self.raise_if_exhausted()
         self.calls += 1
 
     def record_duration(self, seconds: float) -> None:

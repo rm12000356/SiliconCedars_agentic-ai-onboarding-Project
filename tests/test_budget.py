@@ -90,6 +90,34 @@ def test_budget_counts_each_provider_attempt():
     assert budget.calls == 1
 
 
+def test_failed_client_construction_does_not_consume_budget():
+    def bad_factory():
+        raise RuntimeError("missing api key")
+
+    model = ResilientLLM([("a", bad_factory), ("b", bad_factory)])
+    budget = TurnBudget(max_calls=5, max_tokens=10_000, max_seconds=10)
+    with budget_scope(budget):
+        with pytest.raises(RuntimeError):
+            model.invoke([HumanMessage(content="hi")])
+
+    assert budget.calls == 0
+
+
+def test_exhausted_budget_short_circuits_before_build():
+    built = {"n": 0}
+
+    def factory():
+        built["n"] += 1
+        return _FakeClient()
+
+    model = ResilientLLM([("a", factory)])
+    with budget_scope(TurnBudget(max_calls=0, max_tokens=1, max_seconds=1)):
+        with pytest.raises(TurnBudgetExceeded):
+            model.invoke([HumanMessage(content="hi")])
+
+    assert built["n"] == 0
+
+
 def test_chart_route_survives_exhausted_budget():
     state = SupervisorState(
         messages=[HumanMessage(content="chart that")],
