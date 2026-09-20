@@ -1,6 +1,6 @@
 import logging
 
-from langchain_core.messages import HumanMessage, ToolMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, ToolMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from state.state import SupervisorState, SpecialistResult
 from services.llm import llm
@@ -90,7 +90,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
             "  lessons_learned(id, project_name, lesson_text, tags, created_at)\n\n"
             "Elevated-only tools (not queryable via SQL):\n"
             "  get_salary(employee_id) → returns salary\n"
-            "  get_user_credential(user_id) → returns credential info\n"
+            "  get_user_credential(user_id) → returns whether a credential exists\n"
         )
     )
 
@@ -103,7 +103,8 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
         logger.debug("[SQL] iteration %s/%s", i + 1, max_iterations)
         try:
             response = model.invoke(messages)
-        except BadRequestError:
+        except BadRequestError as e:
+            logger.warning("[SQL] bad request: %s: %s", type(e).__name__, e)
             return {
                 "last_result": SpecialistResult(
                     source="sql",

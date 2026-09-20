@@ -66,8 +66,9 @@ def run():
                     config,
                 )
 
-            last_message = result["messages"][-1]
-            print(f"\nAssistant: {last_message.content}")
+            messages = result.get("messages") or []
+            if messages:
+                print(f"\nAssistant: {messages[-1].content}")
 
             chart_path = result.get("chart_path")
             if chart_path:

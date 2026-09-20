@@ -9,7 +9,7 @@ def test_memory_backend_returns_checkpointer_and_no_context(monkeypatch):
     monkeypatch.setenv("CHECKPOINT_BACKEND", "memory")
     memory, saver_context = get_checkpointer()
     assert memory is not None
-    assert isinstance(memory, MemorySaver) or hasattr(memory, "get")
+    assert isinstance(memory, MemorySaver)
     assert saver_context is None
 
 

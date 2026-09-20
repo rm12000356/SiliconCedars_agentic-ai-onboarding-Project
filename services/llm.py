@@ -134,6 +134,8 @@ class ResilientLLM:
 
 
 def _make_groq(model_name: str) -> ChatGroq:
+    if not os.getenv("GROQ_API_KEY"):
+        raise RuntimeError("GROQ_API_KEY is missing from .env")
     return ChatGroq(model=model_name)
 
 

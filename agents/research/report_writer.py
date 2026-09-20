@@ -4,6 +4,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from state.structure_output import ReportOutput
 from state.state import SubGraphSupervisorState
 from services.llm import llm
+from services.message_utils import content_to_text
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ def Report_W(state: SubGraphSupervisorState) -> dict:
         }
 
     research_material = "\n\n".join(
-        _content_to_str(m.content) for m in state.research_messages
+        content_to_text(m.content) for m in state.research_messages
     )
     logger.debug("[REPORT] research_material=%r", research_material[:500])
 
@@ -55,21 +56,3 @@ def Report_W(state: SubGraphSupervisorState) -> dict:
         "research_succeeded": result.success,
         "report_written": True,
     }
-
-
-def _content_to_str(content) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict) and "text" in item:
-                parts.append(str(item["text"]))
-            else:
-                parts.append(str(item))
-        return "\n".join(parts)
-    return str(content)

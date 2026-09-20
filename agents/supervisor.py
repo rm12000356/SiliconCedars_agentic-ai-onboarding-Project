@@ -17,12 +17,17 @@ from services.message_utils import (
 from services.llm import llm
 from services.memory import format_facts_for_prompt
 from services.errors import classify_llm_error
+from agents.clarification import DEFAULT_QUESTION
 
-logger = logging.getLogger("supervisor")
+logger = logging.getLogger(__name__)
 
 MAX_HOPS_PER_TURN = 6
 MAX_SAME_ROUTE_PER_TURN = 2
 MAX_CLARIFICATIONS_PER_TURN = 1
+
+
+def _end_decision() -> SupervisorDecision:
+    return SupervisorDecision(next="end", current_task="")
 
 SUPERVISOR_SYSTEM_PROMPT = """You are the routing supervisor for a company intelligence assistant.
 
@@ -160,7 +165,7 @@ def _generate_clarification_question(decision: SupervisorDecision) -> str:
             "clarification_question_generation_failed",
             extra={"error": f"{type(e).__name__}: {e}"},
         )
-    return "Could you clarify what you'd like me to do?"
+    return DEFAULT_QUESTION
 
 
 def deterministic_decision(
@@ -176,7 +181,7 @@ def deterministic_decision(
             "hop_limit_reached",
             extra={"limit": MAX_HOPS_PER_TURN, "turn": current_turn},
         )
-        return SupervisorDecision(next="end", current_task="")
+        return _end_decision()
 
     if lr is not None:
         if (
@@ -193,7 +198,7 @@ def deterministic_decision(
         # Normal success → force end (prevents loops)
         if lr.status == "done":
             logger.debug("last_result_done_forcing_end")
-            return SupervisorDecision(next="end", current_task="")
+            return _end_decision()
         
 
         if lr.source == "rag" and lr.issue == "rag_unavailable":
@@ -208,7 +213,7 @@ def deterministic_decision(
             )
             if already_explained:
                 logger.debug("permission_denied_already_explained")
-                return SupervisorDecision(next="end", current_task="")
+                return _end_decision()
 
             logger.debug("permission_denied_routing_to_convo")
             return SupervisorDecision(
@@ -244,7 +249,7 @@ def deterministic_decision(
             )
 
     if not state.messages:
-        return SupervisorDecision(next="end", current_task="")
+        return _end_decision()
 
     return None  # residual → LLM
 
@@ -288,7 +293,7 @@ def post_decision_guards(
                 "same_route_cap_hit",
                 extra={"route": decision.next, "cap": MAX_SAME_ROUTE_PER_TURN},
             )
-            return SupervisorDecision(next="end", current_task="")
+            return _end_decision()
 
     if (
         state.last_result
@@ -299,7 +304,7 @@ def post_decision_guards(
             "refused_reroute_to_finished_specialist",
             extra={"route": decision.next},
         )
-        return SupervisorDecision(next="end", current_task="")
+        return _end_decision()
 
     # Only one clarification attempt per turn
     if decision.next == "clarification":
@@ -360,7 +365,7 @@ def enforce_task_history_guard(
             "blocked_duplicate_completed_task",
             extra={"route": decision.next, "task": proposed_task},
         )
-        return SupervisorDecision(next="end", current_task="")
+        return _end_decision()
 
     return decision
 
@@ -425,7 +430,7 @@ def build_prompt(context: dict, previous_error: str | None = None) -> list:
             )
         )
 
-    recent = context["messages"][-6:] if len(context["messages"]) > 6 else context["messages"]
+    recent = context["messages"][-6:]
     messages.extend(recent)
 
     if previous_error:

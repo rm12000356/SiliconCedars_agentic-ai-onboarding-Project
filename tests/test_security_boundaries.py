@@ -3,13 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import HumanMessage
 
 from agents.sql_agent import Sql_agent
-from state.state import SupervisorState
-from tests.conftest import make_config, requires_db, requires_llm
-
-SENSITIVE_KEYWORDS = ("salary", "salaries", "credential", "password")
+from services.message_utils import mentions_sensitive_data
+from tests.conftest import make_config, make_sql_state, requires_db, requires_llm
 
 BLOCKED_BY_KEYWORD = [
     "What is the salary of Rami Noueihed?",
@@ -28,25 +25,16 @@ KEYWORD_BYPASSES = [
 ]
 
 
-def _state(task: str) -> SupervisorState:
-    return SupervisorState(messages=[HumanMessage(content=task)], current_task=task)
-
-
-def _keyword_hit(task: str) -> bool:
-    lower = task.lower()
-    return any(k in lower for k in SENSITIVE_KEYWORDS)
-
-
 @pytest.mark.parametrize("task", BLOCKED_BY_KEYWORD)
 def test_keyword_gate_blocks_obvious_sensitive_words(task):
-    result = Sql_agent(_state(task), make_config("general"))["last_result"]
+    result = Sql_agent(make_sql_state(task), make_config("general"))["last_result"]
     assert result.issue == "permission_denied"
     assert result.status == "failed"
 
 
 @pytest.mark.parametrize("task", KEYWORD_BYPASSES)
 def test_synonyms_are_not_covered_by_keyword_list(task):
-    assert not _keyword_hit(task)
+    assert not mentions_sensitive_data(task)
 
 
 def test_cli_default_permission_is_general():
@@ -89,7 +77,7 @@ def test_run_general_query_cannot_read_salaries():
 @requires_db
 def test_synonym_under_general_does_not_leak_salary_figure():
     result = Sql_agent(
-        _state("What is the compensation for Rami Noueihed?"),
+        make_sql_state("What is the compensation for Rami Noueihed?"),
         make_config("general"),
     )["last_result"]
     summary = (result.summary or "").replace(",", "")

@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 import bcrypt
 from db.connection import get_elevated_connection
 
+logger = logging.getLogger(__name__)
+_DUMMY_PASSWORD_HASH = "$2b$12$CZGyhmoHOBI.zAQX/JXL5uSa8kZBYJ7K9nNdLM1bCywc8.EVcFsAC"
 
-def _row_to_user(row: tuple) -> dict[str, Any]:
+
+def _row_to_user(row: tuple[Any, ...]) -> dict[str, Any]:
     # id, username, password_hash, permission_level, role, display_name, is_active
     return {
         "id": str(row[0]),
@@ -44,7 +48,8 @@ def verify_password(plain: str, password_hash: str) -> bool:
             plain.encode("utf-8"),
             password_hash.encode("utf-8"),
         )
-    except Exception:
+    except (ValueError, TypeError):
+        logger.debug("bcrypt verification failed", exc_info=True)
         return False
 
 
@@ -55,6 +60,7 @@ def authenticate(username: str, password: str) -> Optional[dict[str, Any]]:
     """
     user = get_user_by_username(username)
     if not user:
+        verify_password(password, _DUMMY_PASSWORD_HASH)
         return None
     if not verify_password(password, user["password_hash"]):
         return None

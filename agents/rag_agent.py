@@ -7,9 +7,21 @@ from state.state import SupervisorState, SpecialistResult
 from services.llm import llm
 from rag.retrieval import retrieve_relevant_chunks
 
-logger = logging.getLogger("rag")
+logger = logging.getLogger(__name__)
 
-NO_MATCH_DISTANCE_THRESHOLD = float(os.getenv("RAG_NO_MATCH_DISTANCE_THRESHOLD", "0.8"))
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s=%r; using default %s", name, raw, default)
+        return default
+
+
+NO_MATCH_DISTANCE_THRESHOLD = _env_float("RAG_NO_MATCH_DISTANCE_THRESHOLD", 0.8)
 
 
 def RAG(state: SupervisorState) -> dict:

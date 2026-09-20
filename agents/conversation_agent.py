@@ -32,7 +32,7 @@ def Convo(state: SupervisorState) -> dict:
 
     model = llm()
 
-    recent = state.messages[-6:] if len(state.messages) > 6 else state.messages
+    recent = state.messages[-6:]
     system = f"{CONVO_SYSTEM_PROMPT}\n\nTask: {state.current_task}"
     msg = [SystemMessage(content=system), *recent]
 

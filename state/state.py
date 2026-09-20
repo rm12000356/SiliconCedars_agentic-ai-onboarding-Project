@@ -106,7 +106,8 @@ class SupervisorState(BaseModel):
     )
     turn_count: int = Field(
         default=0,
-        description="Incremented once per external graph.invoke(), by memory_manager."
+        description="Incremented once per new user turn by memory_manager "
+                    "(not on interrupt resumes)."
     )
     clarification_question: Optional[str] = Field(
         default=None,

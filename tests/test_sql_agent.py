@@ -8,22 +8,9 @@ expect PERMISSION_DENIED, no SQL retry."
 """
 
 import pytest
-from langchain_core.messages import HumanMessage
-from langchain_core.runnables import RunnableConfig
 from agents.sql_agent import Sql_agent, _extract_chartable_rows
 from state.state import SupervisorState
-from tests.conftest import requires_db, requires_llm
-
-
-def _make_state(task: str) -> SupervisorState:
-    return SupervisorState(
-        messages=[HumanMessage(content=task)],
-        current_task=task,
-    )
-
-
-def _config(permission_level: str) -> RunnableConfig:
-    return {"configurable": {"permission_level": permission_level}}
+from tests.conftest import make_config, make_sql_state, requires_db, requires_llm
 
 
 @pytest.mark.parametrize(
@@ -36,8 +23,8 @@ def _config(permission_level: str) -> RunnableConfig:
     ],
 )
 def test_general_permission_blocks_sensitive_requests(task):
-    state = _make_state(task)
-    result = Sql_agent(state, _config("general"))
+    state = make_sql_state(task)
+    result = Sql_agent(state, make_config("general"))
 
     specialist_result = result["last_result"]
     assert specialist_result.status == "failed"
@@ -49,8 +36,8 @@ def test_general_permission_blocks_sensitive_requests(task):
 @requires_llm
 @requires_db
 def test_general_permission_synonym_does_not_leak_salary():
-    state = _make_state("What is the compensation for Rami Noueihed?")
-    result = Sql_agent(state, _config("general"))
+    state = make_sql_state("What is the compensation for Rami Noueihed?")
+    result = Sql_agent(state, make_config("general"))
 
     specialist_result = result["last_result"]
     summary = (specialist_result.summary or "").replace(",", "")
@@ -72,4 +59,4 @@ def test_chartable_rows_accept_numbers():
 def test_sql_agent_raises_on_missing_current_task():
     state = SupervisorState(messages=[], current_task=None)
     with pytest.raises(RuntimeError, match="current_task=None"):
-        Sql_agent(state, _config("general"))
+        Sql_agent(state, make_config("general"))

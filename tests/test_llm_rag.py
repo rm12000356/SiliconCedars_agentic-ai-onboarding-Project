@@ -1,22 +1,15 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from agents.rag_agent import RAG
-from state.state import SupervisorState
-from langchain_core.messages import HumanMessage
 
-from tests.conftest import requires_llm, requires_db
+from tests.conftest import make_sql_state, requires_llm, requires_db
 
 
 pytestmark = [pytest.mark.llm, requires_llm, requires_db]
-
-
-def _state(task: str) -> SupervisorState:
-    return SupervisorState(
-        messages=[HumanMessage(content=task)],
-        current_task=task,
-    )
 
 
 def test_llm_rag_answers_from_internal_lessons():
@@ -25,7 +18,7 @@ def test_llm_rag_answers_from_internal_lessons():
     (SQL security / Postgres role-level access).
     """
     task = "What did we learn about SQL security from past projects?"
-    result = RAG(_state(task))
+    result = RAG(make_sql_state(task))
     sr = result["last_result"]
 
     assert sr.source == "rag"
@@ -51,7 +44,7 @@ def test_llm_rag_answers_from_internal_lessons():
 def test_llm_rag_supervisor_design_lesson():
     """Another in-corpus topic: deterministic guards vs prompt-only loop prevention."""
     task = "What did we learn about preventing agent routing loops?"
-    result = RAG(_state(task))
+    result = RAG(make_sql_state(task))
     sr = result["last_result"]
 
     assert sr.source == "rag"
@@ -73,7 +66,7 @@ def test_llm_rag_no_relevant_documents():
     Expect partial + no_matching_documents when retrieval distances are high.
     """
     task = "What is our company policy for deploying services to Antarctica research stations?"
-    result = RAG(_state(task))
+    result = RAG(make_sql_state(task))
     sr = result["last_result"]
 
     assert sr.source == "rag"
@@ -82,13 +75,18 @@ def test_llm_rag_no_relevant_documents():
     assert "no matching" in sr.summary.lower() or "not found" in sr.summary.lower()
 
 
+def _looks_like_money_claim(text: str) -> bool:
+    """Heuristic: a concrete euro amount claim."""
+    return bool(re.search(r"€\s*\d+|\d+\s*euros?", text))
+
+
 def test_llm_rag_does_not_claim_external_facts_as_internal():
     """
     When nothing is retrieved, the agent must not return status=done
     with fabricated internal knowledge.
     """
     task = "According to our internal handbook, what is the exact coffee budget per employee in euros?"
-    result = RAG(_state(task))
+    result = RAG(make_sql_state(task))
     sr = result["last_result"]
 
     assert sr.source == "rag"
@@ -96,15 +94,9 @@ def test_llm_rag_does_not_claim_external_facts_as_internal():
     if sr.status == "done":
         # If retrieval somehow matched something unrelated, still must not invent a euro budget
         summary = sr.summary.lower()
-        assert not re_search_money_claim(summary), (
+        assert not _looks_like_money_claim(summary), (
             f"RAG invented a specific budget figure: {sr.summary}"
         )
     else:
         assert sr.status == "partial"
         assert sr.issue == "no_matching_documents"
-
-
-def re_search_money_claim(text: str) -> bool:
-    import re
-    # Heuristic: a concrete euro amount claim
-    return bool(re.search(r"€\s*\d+|\d+\s*euros?", text))

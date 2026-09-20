@@ -122,6 +122,7 @@ DB_POOL_MAX_SIZE_ELEVATED=3
 DB_POOL_ACQUIRE_TIMEOUT=30
 DB_CONNECT_TIMEOUT=5
 CHART_STORAGE_DIR=.chainlit_charts
+RAG_NO_MATCH_DISTANCE_THRESHOLD=0.8  # max pgvector distance to count as a match
 ```
 
 Use `general` unless you are explicitly testing salary or credential paths.

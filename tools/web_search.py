@@ -198,12 +198,16 @@ def fetch_page(url: str, snippet: str = "") -> str:
                 url, snippet, f"unsupported content type {content_type!r}"
             )
 
-        raw_bytes = b""
+        chunks: list[bytes] = []
+        total = 0
         for chunk in response.iter_content(chunk_size=65536):
-            raw_bytes += chunk
-            if len(raw_bytes) > MAX_RESPONSE_BYTES:
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > MAX_RESPONSE_BYTES:
                 break
-        text_content = raw_bytes.decode(response.encoding or "utf-8", errors="replace")
+        text_content = b"".join(chunks).decode(
+            response.encoding or "utf-8", errors="replace"
+        )
 
         soup = BeautifulSoup(text_content, "html.parser")
         for tag in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):

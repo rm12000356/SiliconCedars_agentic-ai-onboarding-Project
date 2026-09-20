@@ -3,6 +3,7 @@ import logging
 from langchain_core.messages import RemoveMessage, HumanMessage
 from state.state import SupervisorState
 from services.llm import llm
+from services.message_utils import content_to_text
 
 logger = logging.getLogger(__name__)
 
@@ -22,30 +23,41 @@ def memory_manager(state: SupervisorState) -> dict:
 
     if len(state.messages) > MESSAGE_THRESHOLD:
         to_summarize = state.messages[:-KEEP_RECENT_MESSAGES]
-        transcript = "\n".join(f"{m.type}: {m.content}" for m in to_summarize)
+        transcript = "\n".join(
+            f"{m.type}: {content_to_text(m.content)}" for m in to_summarize
+        )
 
         if state.conversation_summary:
             transcript = (
                 f"Summary of even earlier conversation: "
                 f"{state.conversation_summary}\n\n{transcript}"
             )
-        
+
         logger.debug("[MEMORY] summarizing %s old messages", len(to_summarize))
 
-        summary_response = llm().invoke([
-            HumanMessage(
-                content=(
-                    "Summarize this conversation concisely, preserving important "
-                    "facts, names, decisions, and open questions:\n\n" + transcript
+        try:
+            summary_response = llm().invoke([
+                HumanMessage(
+                    content=(
+                        "Summarize this conversation concisely, preserving important "
+                        "facts, names, decisions, and open questions:\n\n" + transcript
+                    )
                 )
+            ])
+        except Exception as e:
+            # memory_manager is the graph entry node: never let a summarization
+            # outage abort the turn. Keep the messages and skip the summary.
+            logger.warning(
+                "[MEMORY] summarization failed, keeping messages: %s: %s",
+                type(e).__name__, e,
             )
-        ])
+        else:
+            summary_text = content_to_text(summary_response.content)
+            removals = [RemoveMessage(id=m.id) for m in to_summarize if m.id]
 
-        removals = [RemoveMessage(id=m.id) for m in to_summarize if m.id]
-
-        update["messages"] = removals
-        update["conversation_summary"] = str(summary_response.content)
-        logger.debug("[MEMORY] summary: %r", str(summary_response.content)[:200])
+            update["messages"] = removals
+            update["conversation_summary"] = summary_text
+            logger.debug("[MEMORY] summary: %r", summary_text[:200])
 
     cutoff = new_turn - TASK_HISTORY_KEEP_TURNS
     kept_history = [r for r in state.task_history if r.turn > cutoff]

@@ -1,5 +1,6 @@
 from functools import partial
 
+import hashlib
 import logging
 
 from langchain_core.messages import HumanMessage
@@ -58,7 +59,8 @@ ROUTING_EXAMPLES = [
 
 
 def routing_target_fn(graph, thread_prefix: str, inputs: dict) -> dict:
-    thread_id = f"{thread_prefix}-{abs(hash(inputs['input']))}"
+    digest = hashlib.sha1(inputs["input"].encode("utf-8")).hexdigest()[:12]
+    thread_id = f"{thread_prefix}-{digest}"
     config = {
         "configurable": {
             "thread_id": thread_id,

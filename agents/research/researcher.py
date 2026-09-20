@@ -159,9 +159,6 @@ def Research(state: SubGraphSupervisorState) -> dict:
                         else:
                             result = tool_fn.invoke(args)
 
-                    else:
-                        result = tool_fn.invoke(args)
-
                 except Exception as e:
                     result = f"Tool error: {type(e).__name__}: {e}"
                     logger.warning("[RESEARCH] tool error: %s: %s", type(e).__name__, e)

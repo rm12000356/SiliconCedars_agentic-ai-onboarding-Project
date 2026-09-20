@@ -171,6 +171,9 @@ async def main(message: cl.Message):
         snapshot = await asyncio.to_thread(graph.get_state, config)
         paused = has_pending_interrupt(snapshot)
     except Exception:
+        logger.warning(
+            "get_state failed; assuming no pending interrupt", exc_info=True
+        )
         paused = False
 
     if paused:
