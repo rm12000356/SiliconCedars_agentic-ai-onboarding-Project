@@ -128,6 +128,12 @@ class SupervisorState(BaseModel):
         description="Filesystem path of the most recent chart PNG; set by "
                     "Visualization and reset by memory_manager each turn."
     )
+    outage: bool = Field(
+        default=False,
+        description="Set when the turn ended because no LLM provider was "
+                    "usable, so Finalize emits a static message without calling "
+                    "the model again."
+    )
 
 
 class SubGraphSupervisorState(BaseModel):

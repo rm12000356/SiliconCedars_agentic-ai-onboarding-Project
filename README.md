@@ -149,7 +149,7 @@ Copy `.env.example` to `.env` and fill in:
 ```env
 GROQ_API_KEY=              # required
 LANGSMITH_API_KEY=         # optional, tracing and evaluation
-OPENROUTER_API_KEY=        # optional, fallback LLM provider
+OPENROUTER_API_KEY=        # optional; only for explicit openrouter/... models
 DATABASE_URL=              # required if CHECKPOINT_BACKEND=postgres
 CHAINLIT_DATABASE_URL=     # required for `chainlit run chat.py`
 

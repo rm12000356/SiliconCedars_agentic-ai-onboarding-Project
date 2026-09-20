@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+
+class LLMOutageError(RuntimeError):
+    """No LLM provider is usable (auth failure or transient outage).
+
+    Raised instead of routing to an agent that would itself need the LLM, so
+    the turn can terminate deterministically.
+    """
+
+
 _TRANSIENT_TOKENS = (
     "rate limit",
     "too many requests",
@@ -16,15 +25,16 @@ _TRANSIENT_TOKENS = (
     "server error",
 )
 
+# Precise phrases only. Bare "api key" / "api_key" used to match the
+# aggregate "Check GROQ_API_KEY..." message and misclassify every outage as
+# auth, including 429s and timeouts.
 _AUTH_TOKENS = (
     "invalid api key",
     "incorrect api key",
-    "api key",
-    "api_key",
+    "invalid_api_key",
     "authentication",
     "unauthorized",
     "forbidden",
-    "invalid_api_key",
     "authenticationerror",
 )
 
@@ -44,13 +54,18 @@ def _resolve_status(exc: Exception) -> int | None:
     return None
 
 
-def classify_llm_error(exc: Exception) -> str | None:
-    """
-    'auth' | 'transient' | None (schema / unknown).
+def _iter_causes(exc: Exception):
+    """Walk the exception chain so an aggregate error is classified by the
+    underlying provider failure rather than its own wrapper message."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
 
-    Prefer HTTP status on the exception when present so we don't
-    substring-match '429' inside unrelated messages.
-    """
+
+def _classify_single(exc: Exception) -> str | None:
     status = _resolve_status(exc)
     if status in (401, 403):
         return "auth"
@@ -62,4 +77,20 @@ def classify_llm_error(exc: Exception) -> str | None:
         return "auth"
     if any(t in haystack for t in _TRANSIENT_TOKENS):
         return "transient"
+    return None
+
+
+def classify_llm_error(exc: Exception) -> str | None:
+    """
+    'auth' | 'transient' | None (schema / unknown).
+
+    Prefer HTTP status on the exception when present so we don't
+    substring-match '429' inside unrelated messages. Classifies the first
+    exception in the cause chain that yields a verdict, so a wrapper
+    RuntimeError is judged by the provider error it wraps.
+    """
+    for candidate in _iter_causes(exc):
+        result = _classify_single(candidate)
+        if result is not None:
+            return result
     return None

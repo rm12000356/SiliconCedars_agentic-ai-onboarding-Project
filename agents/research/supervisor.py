@@ -3,6 +3,7 @@ import logging
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from state.state import SubGraphSupervisorState, SubDecision
 from services.llm import llm
+from services.budget import TurnBudgetExceeded
 from services.message_utils import content_to_text
 
 logger = logging.getLogger(__name__)
@@ -107,6 +108,11 @@ def Sub_controler(state: SubGraphSupervisorState) -> dict:
         logger.debug("[SUB-SUPERVISOR] substantial research note already present -> forcing report")
         return {"next": "report"}
 
+    # Nothing has been researched yet: the answer is known without the LLM.
+    if state.research_attempts == 0 and not state.research_messages:
+        logger.debug("[SUB-SUPERVISOR] no research yet -> researcher (no LLM call)")
+        return {"next": "researcher", "research_attempts": 1}
+
     model = llm().with_structured_output(SubDecision)
 
     messages = [
@@ -118,7 +124,19 @@ def Sub_controler(state: SubGraphSupervisorState) -> dict:
     if latest:
         messages.append(HumanMessage(content=f"Latest research output:\n{latest}"))
 
-    raw = model.invoke(messages)
+    try:
+        raw = model.invoke(messages)
+    except TurnBudgetExceeded:
+        raise
+    # A controller outage should not crash the whole turn: move to the report
+    # step, which will itself degrade if the provider is still down.
+    except Exception as e:
+        logger.warning(
+            "[SUB-SUPERVISOR] decision failed, forcing report: %s: %s",
+            type(e).__name__, e,
+        )
+        return {"next": "report"}
+
     if isinstance(raw, SubDecision):
         decision = raw
     else:

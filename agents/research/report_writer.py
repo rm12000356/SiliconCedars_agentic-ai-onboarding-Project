@@ -4,6 +4,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from state.structure_output import ReportOutput
 from state.state import SubGraphSupervisorState
 from services.llm import llm
+from services.budget import TurnBudgetExceeded
 from services.message_utils import content_to_text
 
 logger = logging.getLogger(__name__)
@@ -42,10 +43,27 @@ def Report_W(state: SubGraphSupervisorState) -> dict:
     logger.debug("[REPORT] research_material=%r", research_material[:500])
 
     model = llm().with_structured_output(ReportOutput)
-    result = model.invoke([
-        SystemMessage(content=REPORT_PROMPT),
-        HumanMessage(content=f"Original task: {state.task}\n\nResearch material:\n{research_material}")
-    ])
+    try:
+        result = model.invoke([
+            SystemMessage(content=REPORT_PROMPT),
+            HumanMessage(content=f"Original task: {state.task}\n\nResearch material:\n{research_material}")
+        ])
+    except TurnBudgetExceeded:
+        raise
+    # A report-writer outage must not crash the turn; return a structural
+    # failure so the supervisor can explain and stop.
+    except Exception as e:
+        logger.warning(
+            "[REPORT] generation failed: %s: %s", type(e).__name__, e
+        )
+        return {
+            "research_messages": [
+                AIMessage(content="The research report could not be generated.")
+            ],
+            "research_succeeded": False,
+            "report_written": True,
+        }
+
     if not isinstance(result, ReportOutput):
         result = ReportOutput.model_validate(result)
 

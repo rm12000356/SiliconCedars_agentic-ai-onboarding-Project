@@ -2,6 +2,9 @@ from psycopg import sql
 from db.connection import get_elevated_connection, get_general_connection
 from langchain.tools import tool
 
+MAX_ROWS = 5000
+MAX_RESULT_BYTES = 2_000_000
+
 @tool
 def get_salary(employee_id: int) -> dict:
     """
@@ -60,14 +63,34 @@ def run_general_query(query_text: str) -> list[dict]:
 
     with get_general_connection() as conn:
         with conn.cursor() as cur:
+            # Read-only transaction: blocks writes, DDL, and temp tables at
+            # the session level (the role grants alone do not).
+            cur.execute("SET TRANSACTION READ ONLY")
             cur.execute(sql.SQL(stripped))
 
             if cur.description is None:
                 return []
 
             columns = [desc[0] for desc in cur.description]
-            rows = cur.fetchall()
-            return [dict(zip(columns, row)) for row in rows]
+            rows = cur.fetchmany(MAX_ROWS + 1)
+            if len(rows) > MAX_ROWS:
+                raise ValueError(
+                    f"Query returned more than {MAX_ROWS} rows. "
+                    "Add a LIMIT or narrow the request."
+                )
+
+            result: list[dict] = []
+            total_bytes = 0
+            for row in rows:
+                item = dict(zip(columns, row))
+                total_bytes += len(str(item))
+                if total_bytes > MAX_RESULT_BYTES:
+                    raise ValueError(
+                        "Query result is too large to return. "
+                        "Narrow the request or select fewer columns."
+                    )
+                result.append(item)
+            return result
 
 GENERAL_TOOLS = [run_general_query]
 ELEVATED_TOOLS = [get_salary, get_user_credential]

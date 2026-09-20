@@ -16,7 +16,7 @@ from services.message_utils import (
 )
 from services.llm import llm
 from services.memory import format_facts_for_prompt
-from services.errors import classify_llm_error
+from services.errors import classify_llm_error, LLMOutageError
 from services.budget import get_budget, TurnBudgetExceeded
 from agents.clarification import DEFAULT_QUESTION
 
@@ -114,11 +114,19 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
 
     decision = deterministic_decision(state, task_history)
 
+    outage = False
+
     if decision is None:
         user_id = (config.get("configurable") or {}).get("user_id")
         try:
             context = gather_context(state, task_history, user_id)
             decision = get_supervisor_decision(context, llm())
+        except LLMOutageError as e:
+            # No provider is usable. End deterministically; routing to an
+            # agent would need the same dead LLM and crash the turn.
+            logger.warning("supervisor_outage_ending_turn", extra={"kind": str(e)})
+            outage = True
+            decision = _end_decision()
         except TurnBudgetExceeded as e:
             # The turn is over budget: stop making decisions and let Finalize
             # close out using whatever the specialists already produced.
@@ -147,6 +155,9 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
 
     if decision.next == "clarification":
         update["clarification_question"] = _generate_clarification_question(decision)
+
+    if outage:
+        update["outage"] = True
 
     return update
 
@@ -503,10 +514,10 @@ def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> Opti
 
     if last_class == "auth":
         logger.critical("supervisor_llm_outage")
-        return SupervisorDecision(next="convo", current_task=_OUTAGE_TASK)
+        raise LLMOutageError("auth")
     if last_class == "transient":
         logger.error("supervisor_llm_transient_outage")
-        return SupervisorDecision(next="convo", current_task=_OUTAGE_TASK)
+        raise LLMOutageError("transient")
 
     logger.error("all_structured_output_attempts_failed")
     return None

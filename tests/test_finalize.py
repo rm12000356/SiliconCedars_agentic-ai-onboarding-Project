@@ -1,7 +1,12 @@
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 
-from agents.finalize import Finalize, NO_ANSWER_FALLBACK
+from agents.finalize import (
+    Finalize,
+    NO_ANSWER_FALLBACK,
+    OUTAGE_MESSAGE,
+    _might_contain_memorable_info,
+)
 from state.state import SpecialistResult, SupervisorState
 
 
@@ -53,3 +58,69 @@ def test_specialist_answer_is_appended_exactly_once():
     assert "messages" in update
     assert len(update["messages"]) == 1
     assert update["messages"][0].content == "Hi there!"
+
+
+def test_outage_emits_static_message_without_llm(monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("Finalize must not call the LLM during an outage")
+
+    monkeypatch.setattr("agents.finalize.llm", boom)
+
+    state = SupervisorState(
+        messages=[HumanMessage(content="hello")],
+        current_task="",
+        last_result=None,
+        turn_count=1,
+        outage=True,
+    )
+
+    update = Finalize(state, _config())
+
+    assert update["messages"][0].content == OUTAGE_MESSAGE
+    assert update["last_result"] is None
+
+
+def test_failed_result_never_leaks_raw_issue_text():
+    state = SupervisorState(
+        messages=[HumanMessage(content="show salaries")],
+        current_task="salaries",
+        last_result=SpecialistResult(
+            source="sql",
+            summary="The requested data could not be found in the database.",
+            status="failed",
+            issue='table_or_schema_missing: relation "salaries" does not exist',
+        ),
+        turn_count=1,
+    )
+
+    update = Finalize(state, _config())
+    content = update["messages"][0].content
+
+    assert "does not exist" not in content
+    assert "table_or_schema_missing" not in content
+
+
+def test_known_issue_uses_user_facing_message():
+    state = SupervisorState(
+        messages=[HumanMessage(content="show salaries")],
+        current_task="salaries",
+        last_result=SpecialistResult(
+            source="sql",
+            summary="Salary and credential data require elevated permissions.",
+            status="failed",
+            issue="permission_denied",
+        ),
+        turn_count=1,
+    )
+
+    update = Finalize(state, _config())
+
+    assert "permission" in update["messages"][0].content.lower()
+
+
+def test_bare_im_does_not_trigger_memory_extraction():
+    assert not _might_contain_memorable_info("I'm happy with the sales numbers.")
+
+
+def test_explicit_memory_intent_triggers_extraction():
+    assert _might_contain_memorable_info("Remember that I prefer bar charts.")

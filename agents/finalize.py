@@ -10,15 +10,64 @@ from services.memory import write_fact
 
 logger = logging.getLogger(__name__)
 
+# Explicit durable-memory intent only. Bare "i'm"/"i am" triggered an
+# extraction call on almost every message, including untrusted content.
 IDENTITY_HINTS = [
-    "my name is", "i'm ", "i am ", "call me", "i prefer", "i like",
-    "please always", "in the future", "i work in", "i'm from",
+    "my name is", "call me", "remember that", "please remember",
+    "i prefer", "i like", "please always", "in the future",
+    "i work in", "i'm from", "i am from", "note that i",
 ]
 
 NO_ANSWER_FALLBACK = (
     "I wasn't able to put together a response for that -- "
     "could you rephrase or add a bit more detail?"
 )
+
+OUTAGE_MESSAGE = (
+    "The assistant is temporarily unavailable due to a service issue. "
+    "Please try again in a moment."
+)
+
+# User-facing text for known internal failure codes. Raw issue strings can
+# contain database/provider errors and must never be shown to the user.
+_GENERIC_FAILURE = "I wasn't able to complete that request."
+
+_ISSUE_MESSAGES = {
+    "permission_denied": "You don't have permission to access that data.",
+    "invalid_request": (
+        "I couldn't complete that database request. Please rephrase your question."
+    ),
+    "budget_exceeded": (
+        "That request was too complex to finish in one go. Please narrow it down."
+    ),
+    "rag_unavailable": "Internal document search is temporarily unavailable.",
+    "no_matching_documents": (
+        "I couldn't find any internal documents matching that request."
+    ),
+    "research_no_results": (
+        "I couldn't find reliable external information for that request."
+    ),
+    "research_empty_report": "The research step didn't produce a usable report.",
+    "visualization_failed": "I couldn't generate that chart.",
+    "invalid_chart_spec": "That request didn't contain valid chart data.",
+    "empty_answer": "I couldn't produce an answer from the data retrieved.",
+    "empty_synthesis": "I couldn't produce an answer from the data retrieved.",
+}
+
+
+def _issue_code(issue: str | None) -> str:
+    return (issue or "").split(":", 1)[0].strip()
+
+
+def _user_facing_failure(result) -> str:
+    code = _issue_code(result.issue)
+    if code in _ISSUE_MESSAGES:
+        return _ISSUE_MESSAGES[code]
+
+    summary = (result.summary or "").strip()
+    if summary and (not result.issue or result.issue not in summary):
+        return summary
+    return _GENERIC_FAILURE
 
 
 def _might_contain_memorable_info(text: str) -> bool:
@@ -58,12 +107,20 @@ def _already_delivered(messages, content: str) -> bool:
 def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
     update: dict = {}
 
+    if state.outage:
+        # No provider was usable. Emit a static message and make no LLM calls.
+        if not _already_delivered(state.messages, OUTAGE_MESSAGE):
+            update["messages"] = [AIMessage(content=OUTAGE_MESSAGE)]
+        update["last_result"] = None
+        update["clarification_count"] = 0
+        return update
+
     if state.last_result is not None:
         result = state.last_result
         if result.status == "done":
             content = result.summary
         else:
-            content = f"{result.summary} ({result.issue or 'incomplete'})"
+            content = _user_facing_failure(result)
 
         if content and content.strip() and not _already_delivered(state.messages, content):
             update["messages"] = [AIMessage(content=content)]

@@ -31,7 +31,8 @@ def _is_blocked_ip(ip_str: str) -> bool:
     except ValueError:
         return True
     return (
-        ip.is_loopback
+        not ip.is_global  # covers CGNAT 100.64.0.0/10 and other special ranges
+        or ip.is_loopback
         or ip.is_private
         or ip.is_link_local
         or ip.is_reserved
