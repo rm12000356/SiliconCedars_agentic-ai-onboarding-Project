@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 MAX_HOPS_PER_TURN = 6
 MAX_SAME_ROUTE_PER_TURN = 2
 MAX_CLARIFICATIONS_PER_TURN = 1
+MAX_MULTI_INTENT_HOPS = 1
 
 
 def _end_decision() -> SupervisorDecision:
@@ -51,6 +52,7 @@ Decide the single best next route for the latest user request.
 - Facts about a specific record/entity in the database (a named person's department, salary, or ID; a sale row; a count or list of rows) → sql, even when phrased conversationally.
 - Questions about what a document/policy/procedure says, or what was learned from past projects → rag.
 - Definitions and general knowledge (e.g. "What does SQL stand for?", "What does RAG mean?") → convo, never sql.
+- If the latest user message contains multiple distinct asks and the last specialist result only answered part of it, route to the appropriate specialist for the remaining part instead of ending.
 - Focus almost exclusively on the latest user message and the latest specialist result. Ignore older conversation history unless it is directly needed to understand the current request.
 
 ### sql vs rag
@@ -66,6 +68,7 @@ Decide by where the answer comes from:
 - "What is the company remote work policy?" → rag
 - "What did we learn about SQL security from past internal projects?" → rag
 - "What does SQL stand for?" → convo
+- "How many employees are there, and what does the remote work policy say?" → sql first; once the count is answered, the remaining policy question → rag
 
 ### current_task
 - convo → short pre-summary of relevant context
@@ -115,6 +118,7 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
     decision = deterministic_decision(state, task_history)
 
     outage = False
+    multi_intent_hop = decision is None and _should_allow_multi_intent_hop(state)
 
     if decision is None:
         user_id = (config.get("configurable") or {}).get("user_id")
@@ -159,6 +163,9 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
     if outage:
         update["outage"] = True
 
+    if multi_intent_hop:
+        update["multi_intent_hops"] = state.multi_intent_hops + 1
+
     return update
 
 
@@ -185,6 +192,38 @@ def _generate_clarification_question(decision: SupervisorDecision) -> str:
             extra={"error": f"{type(e).__name__}: {e}"},
         )
     return DEFAULT_QUESTION
+
+
+_QUESTION_WORD_RE = re.compile(
+    r"\b(how many|how much|what|which|who|where|when|why)\b",
+    re.IGNORECASE,
+)
+_MULTI_INTENT_SEPARATOR_RE = re.compile(r"(,|;|\band\b|\bthen\b|\balso\b)", re.IGNORECASE)
+
+
+def _has_multi_intent(state: SupervisorState) -> bool:
+    """Cheap check for two distinct asks in the latest user request.
+
+    Requires at least two question clauses so single-intent conjunctions
+    ("employees and departments") do not trigger an extra hop.
+    """
+    text = (latest_user_request(state.messages) or "").strip()
+    if not text:
+        return False
+    question_words = _QUESTION_WORD_RE.findall(text)
+    if len(question_words) < 2:
+        return False
+    return text.count("?") >= 2 or bool(_MULTI_INTENT_SEPARATOR_RE.search(text))
+
+
+def _should_allow_multi_intent_hop(state: SupervisorState) -> bool:
+    lr = state.last_result
+    return (
+        lr is not None
+        and lr.status == "done"
+        and state.multi_intent_hops < MAX_MULTI_INTENT_HOPS
+        and _has_multi_intent(state)
+    )
 
 
 def _failure_explanation(result: SpecialistResult) -> str:
@@ -233,8 +272,12 @@ def deterministic_decision(
         return _end_decision()
 
     if lr is not None:
-        # Normal success → force end (prevents loops)
+        # Normal success → force end, unless this is a multi-part request with
+        # an unused bounded hop (then let the LLM route the remaining part).
         if lr.status == "done":
+            if _should_allow_multi_intent_hop(state):
+                logger.debug("multi_intent_allowing_extra_hop")
+                return None
             logger.debug("last_result_done_forcing_end")
             return _end_decision()
         

@@ -15,7 +15,7 @@ import pytest
 
 from agents.supervisor import gather_context, get_supervisor_decision
 from services.llm import llm
-from state.state import SupervisorState
+from state.state import SpecialistResult, SupervisorState
 
 from tests.conftest import requires_llm
 
@@ -232,3 +232,28 @@ def test_llm_routes_convo_prompts():
 
 def test_llm_routes_clarification_prompts():
     _assert_precision(CLARIFICATION_CASES, "clarification", MIN_ACCURACY["clarification"])
+
+
+def test_llm_routes_remaining_part_of_multi_intent():
+    state = SupervisorState(
+        messages=[
+            HumanMessage(
+                content=(
+                    "How many employees are there, and what does the remote "
+                    "work policy say?"
+                )
+            )
+        ],
+        last_result=SpecialistResult(
+            source="sql", summary="There are 2 employees.", status="done"
+        ),
+        current_task="count employees",
+        turn_count=1,
+        multi_intent_hops=0,
+    )
+    context = gather_context(state, task_history=[], user_id=None)
+
+    decision = get_supervisor_decision(context, llm())
+
+    assert decision is not None
+    assert decision.next == "rag"

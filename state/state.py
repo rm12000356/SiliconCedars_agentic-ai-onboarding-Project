@@ -118,6 +118,12 @@ class SupervisorState(BaseModel):
         default=0,
         description="Clarifications already asked this turn; reset by memory_manager."
     )
+    multi_intent_hops: int = Field(
+        default=0,
+        description="Extra specialist hops granted for a multi-part request this "
+                    "turn; reset by memory_manager and capped by "
+                    "MAX_MULTI_INTENT_HOPS."
+    )
     conversation_summary: Optional[str] = Field(
         default=None,
         description="Rolling summary of pruned older messages; injected at the "

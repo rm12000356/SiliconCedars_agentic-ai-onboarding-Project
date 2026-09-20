@@ -19,6 +19,7 @@ from agents.supervisor import (
     get_supervisor_decision,
     post_decision_guards,
     supervisor_agent,
+    _has_multi_intent,
     _user_wants_visualization,
 )
 from state.state import SpecialistResult, SupervisorState, TaskRecord
@@ -341,6 +342,89 @@ def test_routing_failure_non_sensitive_routes_to_convo(monkeypatch):
     update = supervisor_agent(state, {"configurable": {}})
 
     assert update["next"] == "convo"
+
+
+def test_multi_intent_detected_on_two_question_clauses():
+    state = SupervisorState(
+        messages=[
+            HumanMessage(
+                content="How many employees are there, and what does the policy say?"
+            )
+        ]
+    )
+    assert _has_multi_intent(state)
+
+
+def test_two_questions_without_separator_are_multi_intent():
+    state = SupervisorState(
+        messages=[HumanMessage(content="How many employees? What does the policy say?")]
+    )
+    assert _has_multi_intent(state)
+
+
+def test_single_intent_conjunction_is_not_multi_intent():
+    state = SupervisorState(
+        messages=[HumanMessage(content="Show employees and departments.")]
+    )
+    assert not _has_multi_intent(state)
+
+
+def test_multi_intent_done_allows_residual_when_hop_available():
+    lr = SpecialistResult(source="sql", summary="2 employees", status="done")
+    state = SupervisorState(
+        messages=[
+            HumanMessage(
+                content="How many employees are there, and what does the policy say?"
+            )
+        ],
+        last_result=lr,
+        current_task="count employees",
+        turn_count=1,
+        multi_intent_hops=0,
+    )
+    assert deterministic_decision(state, []) is None
+
+
+def test_multi_intent_done_ends_when_hop_used():
+    lr = SpecialistResult(source="sql", summary="2 employees", status="done")
+    state = SupervisorState(
+        messages=[
+            HumanMessage(
+                content="How many employees are there, and what does the policy say?"
+            )
+        ],
+        last_result=lr,
+        current_task="count employees",
+        turn_count=1,
+        multi_intent_hops=1,
+    )
+    decision = deterministic_decision(state, [])
+    assert decision is not None
+    assert decision.next == "end"
+
+
+def test_supervisor_agent_increments_multi_intent_hop(monkeypatch):
+    monkeypatch.setattr(
+        "agents.supervisor.get_supervisor_decision",
+        lambda *a, **k: SupervisorDecision(next="rag", current_task="policy"),
+    )
+    lr = SpecialistResult(source="sql", summary="2 employees", status="done")
+    state = SupervisorState(
+        messages=[
+            HumanMessage(
+                content="How many employees are there, and what does the policy say?"
+            )
+        ],
+        last_result=lr,
+        current_task="count employees",
+        turn_count=1,
+        multi_intent_hops=0,
+    )
+
+    update = supervisor_agent(state, {"configurable": {}})
+
+    assert update["next"] == "rag"
+    assert update["multi_intent_hops"] == 1
 
 
 def test_llm_outage_ends_turn_deterministically(monkeypatch):
