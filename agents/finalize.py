@@ -28,6 +28,47 @@ OUTAGE_MESSAGE = (
     "Please try again in a moment."
 )
 
+# User-facing text for known internal failure codes. Raw issue strings can
+# contain database/provider errors and must never be shown to the user.
+_GENERIC_FAILURE = "I wasn't able to complete that request."
+
+_ISSUE_MESSAGES = {
+    "permission_denied": "You don't have permission to access that data.",
+    "invalid_request": (
+        "I couldn't complete that database request. Please rephrase your question."
+    ),
+    "budget_exceeded": (
+        "That request was too complex to finish in one go. Please narrow it down."
+    ),
+    "rag_unavailable": "Internal document search is temporarily unavailable.",
+    "no_matching_documents": (
+        "I couldn't find any internal documents matching that request."
+    ),
+    "research_no_results": (
+        "I couldn't find reliable external information for that request."
+    ),
+    "research_empty_report": "The research step didn't produce a usable report.",
+    "visualization_failed": "I couldn't generate that chart.",
+    "invalid_chart_spec": "That request didn't contain valid chart data.",
+    "empty_answer": "I couldn't produce an answer from the data retrieved.",
+    "empty_synthesis": "I couldn't produce an answer from the data retrieved.",
+}
+
+
+def _issue_code(issue: str | None) -> str:
+    return (issue or "").split(":", 1)[0].strip()
+
+
+def _user_facing_failure(result) -> str:
+    code = _issue_code(result.issue)
+    if code in _ISSUE_MESSAGES:
+        return _ISSUE_MESSAGES[code]
+
+    summary = (result.summary or "").strip()
+    if summary and (not result.issue or result.issue not in summary):
+        return summary
+    return _GENERIC_FAILURE
+
 
 def _might_contain_memorable_info(text: str) -> bool:
     lower = text.lower()
@@ -79,7 +120,7 @@ def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
         if result.status == "done":
             content = result.summary
         else:
-            content = f"{result.summary} ({result.issue or 'incomplete'})"
+            content = _user_facing_failure(result)
 
         if content and content.strip() and not _already_delivered(state.messages, content):
             update["messages"] = [AIMessage(content=content)]
