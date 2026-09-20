@@ -151,7 +151,6 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
             decision = SupervisorDecision(next="convo", current_task=_OUTAGE_TASK)
 
     decision = post_decision_guards(state, decision, task_history)
-    decision = enforce_task_history_guard(state, decision, task_history)
 
     logger.debug(
         "final_decision",
@@ -456,48 +455,6 @@ def post_decision_guards(
                     "Do not invent an answer."
                 ),
             )
-
-    return decision
-
-
-def _normalize_task(task: str) -> str:
-    return " ".join(task.lower().split())
-
-
-def enforce_task_history_guard(
-    state: SupervisorState,
-    decision: SupervisorDecision,
-    task_history: list[TaskRecord],
-) -> SupervisorDecision:
-    """Block the exact same completed task on the same route within the same turn."""
-    if decision.next == "end":
-        return decision
-
-    if decision.next not in ("rag", "convo", "sql", "research", "visu"):
-        return decision
-
-    current_turn = get_current_turn(state)
-    proposed_task = (decision.current_task or "").strip()
-    if not proposed_task:
-        return decision
-
-    normalized_proposed = _normalize_task(proposed_task)
-
-    for record in reversed(task_history):
-        if record.turn != current_turn:
-            continue
-        if record.status != "done":
-            continue
-        if record.route != decision.next:
-            continue
-        if _normalize_task(record.task) != normalized_proposed:
-            continue
-
-        logger.warning(
-            "blocked_duplicate_completed_task",
-            extra={"route": decision.next, "task": proposed_task},
-        )
-        return _end_decision()
 
     return decision
 

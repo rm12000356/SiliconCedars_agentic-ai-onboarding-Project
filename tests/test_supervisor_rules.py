@@ -15,7 +15,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 from agents.supervisor import (
     MAX_HOPS_PER_TURN,
     deterministic_decision,
-    enforce_task_history_guard,
     get_supervisor_decision,
     post_decision_guards,
     supervisor_agent,
@@ -483,6 +482,51 @@ def test_refuse_reroute_to_just_finished_specialist():
     assert guarded.next == "end"
 
 
+def test_refused_reroute_reachable_after_multi_intent_hop(monkeypatch):
+    """The guard fires through the real node when a multi-intent turn lets the
+    LLM re-propose the specialist that just finished."""
+    monkeypatch.setattr(
+        "agents.supervisor.get_supervisor_decision",
+        lambda *a, **k: SupervisorDecision(next="sql", current_task="more sql"),
+    )
+    lr = SpecialistResult(source="sql", summary="2 employees", status="done")
+    state = SupervisorState(
+        messages=[
+            HumanMessage(
+                content="How many employees are there, and what does the policy say?"
+            )
+        ],
+        last_result=lr,
+        current_task="count employees",
+        turn_count=1,
+        multi_intent_hops=0,
+    )
+
+    update = supervisor_agent(state, {"configurable": {}})
+
+    assert update["next"] == "end"
+
+
+def test_permission_denied_already_explained_reachable_via_multi_hop():
+    """A second sensitive part after convo already explained permission ends."""
+    lr = SpecialistResult(
+        source="sql", summary="denied", status="failed", issue="permission_denied"
+    )
+    history = [_record(route="convo", task="explain restriction", status="done")]
+    state = SupervisorState(
+        messages=[HumanMessage(content="Show salaries, and show credentials.")],
+        last_result=lr,
+        current_task="credentials",
+        task_history=history,
+        turn_count=1,
+        multi_intent_hops=1,
+    )
+
+    update = supervisor_agent(state, {"configurable": {}})
+
+    assert update["next"] == "end"
+
+
 def test_first_clarification_in_same_turn_is_allowed():
     state = _state(text="still unclear", clarification_count=0)
     decision = SupervisorDecision(next="clarification", current_task="ask once")
@@ -495,22 +539,6 @@ def test_clarification_cap_routes_to_convo():
     decision = SupervisorDecision(next="clarification", current_task="ask again")
     guarded = post_decision_guards(state, decision, [])
     assert guarded.next == "convo"
-
-
-def test_duplicate_completed_task_blocked():
-    history = [_record(route="sql", task="count employees", status="done")]
-    state = _state(text="count again", current_task="count employees", task_history=history)
-    decision = SupervisorDecision(next="sql", current_task="count employees")
-    guarded = enforce_task_history_guard(state, decision, history)
-    assert guarded.next == "end"
-
-
-def test_different_task_same_route_allowed():
-    history = [_record(route="sql", task="count employees", status="done")]
-    state = _state(text="sum sales", current_task="sum sales", task_history=history)
-    decision = SupervisorDecision(next="sql", current_task="sum sales")
-    guarded = enforce_task_history_guard(state, decision, history)
-    assert guarded.next == "sql"
 
 
 def test_supervisor_agent_skips_llm_when_last_result_done(monkeypatch):

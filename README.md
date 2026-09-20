@@ -76,9 +76,9 @@ The keyword gate is deliberately **not** a security control: a missed synonym ca
 
 The system uses deterministic guards rather than relying entirely on the model:
 
-* Never loop on a failed specialist.
+* Never loop on a failed specialist (one retry, then explain).
 * Stop after a defined number of research attempts.
-* Force `end` after a successful result.
+* Force `end` after a successful result, except for a bounded multi-part request (`MAX_MULTI_INTENT_HOPS`).
 * Automatically route SQL → visualization in the same turn when `structured_data` exists and the user asked for a chart.
 
 These rules are enforced in `deterministic_decision`.
@@ -93,15 +93,16 @@ Each time the supervisor runs it:
 2. Calls `deterministic_decision` (`agents/supervisor.py`), which resolves the turn without the LLM in this order:
    - Per-turn hop limit (`MAX_HOPS_PER_TURN`) → `end`.
    - A `done` result with `structured_data` and chart intent → `visu`.
-   - A `done` result → `end` (prevents loops).
+   - A `done` result → `end`, unless the request has multiple parts and an extra hop is still available (`MAX_MULTI_INTENT_HOPS`), in which case the LLM routes the remaining part.
    - `rag_unavailable` → `convo` (honest outage message).
-   - `permission_denied` → `convo`, but only once per turn.
+   - `permission_denied` → `convo`; an already-explained denial ends the turn.
    - `no_matching_documents` → `convo` (never invent an answer).
-   - A previously failed/partial result on the same route → `convo` explaining the limitation.
+   - A repeat failure on the same route → `convo` with the real limitation. The first failure returns to the LLM for one retry.
    - Anything else → the LLM is consulted for a genuinely novel decision.
 3. Applies `post_decision_guards`: same-route cap per turn (`MAX_SAME_ROUTE_PER_TURN`), refusal to re-route to a specialist that already finished, and at most one clarification per turn (`MAX_CLARIFICATIONS_PER_TURN`).
-4. Applies `enforce_task_history_guard`: blocks the exact same completed task on the same route within the turn.
-5. Maps the decision into state via `map_to_state`, which clears `last_result` for every route except `end` and `visu` (those still need the structured data).
+4. Maps the decision into state via `map_to_state`, which clears `last_result` for every route except `end` and `visu` (those still need the structured data).
+
+The refusal-to-reroute and already-explained-denial guards are reachable through the multi-intent hop (both are covered by tests that go through `supervisor_agent`). The hop limit and clarification cap remain as backstops.
 
 Clarification is an interrupt: `Clarification` pauses the graph, and `chat.py` / `main.py` resume it with `Command(resume=…)`. `memory_manager` runs once per user turn, not on resume.
 
