@@ -203,6 +203,30 @@ def test_user_does_not_want_visualization_on_plain_data_question():
     assert not _user_wants_visualization(_state(text="How many employees are there?"))
 
 
+def test_user_wants_visualization_new_chart_types():
+    for text in (
+        "Plot a histogram of sales",
+        "Make a scatter plot",
+        "Create a donut chart",
+        "show a doughnut graph",
+    ):
+        assert _user_wants_visualization(_state(text=text)), text
+
+
+def test_chart_vocabulary_collocations_are_not_visualization():
+    for text in (
+        "Show me the org chart.",
+        "What is the chart of accounts?",
+        "He is a member of the bar association.",
+        "She passed the bar exam.",
+        "We bought a plot of land.",
+        "This is a graph database.",
+        "Graph theory is interesting.",
+        "I entered a pie eating contest.",
+    ):
+        assert not _user_wants_visualization(_state(text=text)), text
+
+
 def test_user_wants_visualization_multimodal_content():
     state = SupervisorState(
         messages=[HumanMessage(content=[{"type": "text", "text": "Please visualize this"}])],

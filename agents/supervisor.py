@@ -279,13 +279,55 @@ def deterministic_decision(
     return None  # residual → LLM
 
 
+_CHART_TYPE = r"(?:bar|pie|line|scatter|histogram|donut|doughnut)"
+
+# Phrases that mention chart vocabulary but are not visualization requests.
+_CHART_EXCLUSIONS = (
+    "org chart",
+    "chart of accounts",
+    "bar association",
+    "bar exam",
+    "plot of land",
+    "plot twist",
+    "graph database",
+    "graph theory",
+    "pie eating",
+)
+_CHART_EXCLUSION_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(p) for p in _CHART_EXCLUSIONS) + r")\b",
+    re.IGNORECASE,
+)
+
+# Unambiguous chart commands that override an exclusion phrase.
+_CHART_HARD_RE = re.compile(
+    r"\bvisuali[sz]e\b"
+    rf"|\b{_CHART_TYPE}\s+(?:chart|graph|plot)\b"
+    rf"|\bas\s+an?\s+{_CHART_TYPE}\b",
+    re.IGNORECASE,
+)
+
+# Broad chart vocabulary. "line" is intentionally absent (too ambiguous); it
+# only counts via "line chart"/"line graph"/"as a line".
+_CHART_INTENT_RE = re.compile(
+    r"\bvisuali[sz]e\b"
+    rf"|\b{_CHART_TYPE}\s+(?:chart|graph|plot)\b"
+    r"|\b(?:chart|graph|plot|pie|pies|bar|bars)\b"
+    rf"|\bas\s+an?\s+(?:{_CHART_TYPE}|chart|graph|plot)\b"
+    rf"|\b(?:make|create|draw|generate|show me|give me)\b[^.?!]{{0,30}}"
+    rf"\b(?:chart|graph|plot|{_CHART_TYPE})\b",
+    re.IGNORECASE,
+)
+
+
 def _user_wants_visualization(state: SupervisorState) -> bool:
     """
     Lightweight chart-intent check.
 
     Looks at the latest request plus any clarification answers, so an answer
     like "as a pie chart" still counts even though latest_user_request
-    deliberately skips tagged clarification answers.
+    deliberately skips tagged clarification answers. Known non-visual
+    collocations ("org chart", "plot of land", ...) are excluded unless an
+    unambiguous chart command is also present.
     """
     if not state.messages:
         return False
@@ -295,11 +337,10 @@ def _user_wants_visualization(state: SupervisorState) -> bool:
     if not text:
         return False
 
-    if "line chart" in text or "line graph" in text:
-        return True
-    return bool(
-        re.search(r"\b(chart|graph|plot|visuali[sz]e|bar|bars|pie|pies)\b", text)
-    )
+    if _CHART_EXCLUSION_RE.search(text):
+        return bool(_CHART_HARD_RE.search(text))
+
+    return bool(_CHART_INTENT_RE.search(text))
 
 
 def post_decision_guards(
