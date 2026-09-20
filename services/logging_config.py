@@ -13,9 +13,9 @@ def configure_logging() -> None:
 
     Respects LOG_LEVEL (default INFO). If the root logger already has
     handlers (e.g. Chainlit configured it), only the level is adjusted;
-    otherwise a plain stream handler is installed. stdout is switched to
-    UTF-8 on a best-effort basis so a legacy Windows console cannot raise
-    UnicodeEncodeError while emitting log lines.
+    otherwise a plain stream handler is installed. stdout and stderr are
+    switched to UTF-8 on a best-effort basis so a legacy Windows console
+    cannot raise UnicodeEncodeError while emitting log lines.
     """
     level = os.getenv("LOG_LEVEL", "INFO").upper()
     if level not in logging.getLevelNamesMapping():

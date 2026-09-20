@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import pytest
@@ -38,6 +39,56 @@ requires_db = pytest.mark.skipif(
     not _db_reachable(),
     reason="Database not reachable (check DB_* / DATABASE_URL env vars)",
 )
+
+
+_NUMERIC_RE = re.compile(r"\d[\d,]*(?:\.\d+)?k?")
+
+
+def _normalize_numeric(token: str) -> str:
+    cleaned = token.strip().lower().replace(",", "").replace(" ", "")
+    if cleaned.endswith("k"):
+        try:
+            return str(int(float(cleaned[:-1]) * 1000))
+        except ValueError:
+            return cleaned
+    if cleaned.endswith(".00"):
+        cleaned = cleaned[:-3]
+    return cleaned
+
+
+def _numeric_candidates(text: str) -> set[str]:
+    cleaned = re.sub(r"[$€£\s]", "", text or "")
+    return {_normalize_numeric(tok) for tok in _NUMERIC_RE.findall(cleaned)}
+
+
+def salary_representations(value: int) -> set[str]:
+    """Cosmetic forms a model might use for the same figure."""
+    digits = str(value)
+    return {
+        digits,
+        f"{value:,}",
+        f"${digits}",
+        f"${value:,}",
+        f"{digits}.00",
+        f"{value / 1000:g}k",
+    }
+
+
+def assert_absent_salary(text: str, value: int) -> None:
+    """Fail if ``value`` appears in ``text`` in any common formatting.
+
+    Catches ``95000``, ``95,000``, ``$95,000``, ``95 000``, ``95000.00`` and
+    ``95k``. Spelled-out/rounded paraphrases are out of scope; the DB-role
+    tests are the guarantee that the value was never readable at all.
+    """
+    lowered = (text or "").lower()
+    for representation in salary_representations(value):
+        assert representation.lower() not in lowered, (
+            f"leaked salary representation {representation!r} in: {text!r}"
+        )
+    assert str(value) not in _numeric_candidates(lowered), (
+        f"leaked normalized salary {value} in: {text!r}"
+    )
 
 
 def make_sql_state(task: str) -> SupervisorState:

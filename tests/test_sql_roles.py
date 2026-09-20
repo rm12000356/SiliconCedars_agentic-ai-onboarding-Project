@@ -10,11 +10,9 @@ pytestmark = [pytest.mark.integration, requires_db]
 def test_general_role_cannot_query_salaries():
     with get_general_connection() as conn:
         with conn.cursor() as cur:
-            try:
+            with pytest.raises(Exception):
                 cur.execute("SELECT * FROM salaries")
-                assert False, "general_role should NOT be able to query salaries"
-            except Exception as e:
-                print(f"Expected failure: {e}")
+                cur.fetchall()
 
 
 def test_general_role_cannot_see_salaries_in_metadata():

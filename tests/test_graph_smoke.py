@@ -3,7 +3,6 @@ from graph.workflow import Main_WorkFlow, sub_workflow
 
 def test_main_graph_compiles():
     graph = Main_WorkFlow()
-    assert graph is not None
     nodes = set(graph.get_graph().nodes)
     for required in (
         "memory_manager", "supervisor", "sql", "rag", "research",

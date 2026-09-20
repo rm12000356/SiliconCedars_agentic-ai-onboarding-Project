@@ -7,13 +7,12 @@ repeat-failure, post-guards, and duplicate-task blocking.
 
 from __future__ import annotations
 
-from typing import Literal, cast
+from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agents.supervisor import (
     MAX_HOPS_PER_TURN,
-    MAX_SAME_ROUTE_PER_TURN,
     deterministic_decision,
     enforce_task_history_guard,
     post_decision_guards,
@@ -291,7 +290,6 @@ def test_same_route_cap_forces_end():
         _record(route="sql", task="a"),
         _record(route="sql", task="b"),
     ]
-    assert len(history) >= MAX_SAME_ROUTE_PER_TURN
     state = _state(text="again", task_history=history)
     decision = SupervisorDecision(next="sql", current_task="c")
     guarded = post_decision_guards(state, decision, history)

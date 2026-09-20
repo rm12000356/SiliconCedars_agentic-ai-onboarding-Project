@@ -8,6 +8,16 @@ Deterministic code guards, including attempt counters, task history, `done → e
 
 The LLM is only consulted for genuinely novel routing decisions.
 
+## Architecture
+
+The main graph is a supervisor loop: every specialist returns to the supervisor, which re-decides until it ends the turn through `finalize`.
+
+![Main graph](graph_structure.png)
+
+The research route is a self-contained subgraph wrapped as a single node (`make_research_node`). It has its own controller and a report-writer terminal state.
+
+![Research subgraph](SubGraph_structure.png)
+
 ## Structure
 
 * `agents/`
@@ -52,12 +62,15 @@ The LLM is only consulted for genuinely novel routing decisions.
 
 ### Security
 
-Sensitive data such as salaries and credentials is protected by two layers:
+Sensitive data such as salaries and credentials is protected by three layers, only one of which is a real security boundary:
 
-1. Which tools are bound through `permission_level` in the configuration.
-2. PostgreSQL role grants. `general_role` has no grants on `salaries` or `credentials`.
+| Layer | Mechanism | Role |
+| --- | --- | --- |
+| 1 | Tool binding by `permission_level` (`agents/sql_agent.py`) | A `general` user is never bound `get_salary` / `get_user_credential`, so the model cannot call them |
+| 2 | PostgreSQL role grants (`db/init/02_roles.sql`) | **The actual security boundary.** `general_role` has no grants on `salaries` or `credentials`, and cannot even see them in `information_schema` |
+| 3 | Sensitive-intent gate (`services/message_utils.py`) | UX fast-path only. A precision-first synonym/regex list gives a clear denial instead of a database error |
 
-Keyword checks in `Sql_agent` are a convenience fast-path, not the security boundary.
+The keyword gate is deliberately **not** a security control: a missed synonym cannot grant access, because layer 2 still denies the query. An LLM-based classifier is intentionally not used for authorization, consistent with the project lesson that authorization must not be enforced by model judgment.
 
 ### Deterministic Guards
 
@@ -69,6 +82,47 @@ The system uses deterministic guards rather than relying entirely on the model:
 * Automatically route SQL → visualization in the same turn when `structured_data` exists and the user asked for a chart.
 
 These rules are enforced in `deterministic_decision`.
+
+### Routing State Machine
+
+The graph is `START → memory_manager → supervisor → {rag | convo | sql | visu | research | clarification} → supervisor → … → finalize → END`. Every specialist edge returns to `supervisor`; only `finalize` reaches `END`.
+
+Each time the supervisor runs it:
+
+1. Records the previous specialist result as a `TaskRecord` on the current turn.
+2. Calls `deterministic_decision` (`agents/supervisor.py`), which resolves the turn without the LLM in this order:
+   - Per-turn hop limit (`MAX_HOPS_PER_TURN`) → `end`.
+   - A `done` result with `structured_data` and chart intent → `visu`.
+   - A `done` result → `end` (prevents loops).
+   - `rag_unavailable` → `convo` (honest outage message).
+   - `permission_denied` → `convo`, but only once per turn.
+   - `no_matching_documents` → `convo` (never invent an answer).
+   - A previously failed/partial result on the same route → `convo` explaining the limitation.
+   - Anything else → the LLM is consulted for a genuinely novel decision.
+3. Applies `post_decision_guards`: same-route cap per turn (`MAX_SAME_ROUTE_PER_TURN`), refusal to re-route to a specialist that already finished, and at most one clarification per turn (`MAX_CLARIFICATIONS_PER_TURN`).
+4. Applies `enforce_task_history_guard`: blocks the exact same completed task on the same route within the turn.
+5. Maps the decision into state via `map_to_state`, which clears `last_result` for every route except `end` and `visu` (those still need the structured data).
+
+Clarification is an interrupt: `Clarification` pauses the graph, and `chat.py` / `main.py` resume it with `Command(resume=…)`. `memory_manager` runs once per user turn, not on resume.
+
+The research subgraph (`agents/research/`) is its own controller loop. `Sub_controler` ends immediately if `report_written` is set, forces `report` after `MAX_RESEARCH_ATTEMPTS`, and forces `report` once a substantial research note exists — so it cannot loop on the report step.
+
+### Cost and Latency Budget
+
+Beyond per-node caps, a single turn has an aggregate LLM budget enforced at the one place every call passes through (`ResilientLLM.invoke`):
+
+* `MAX_LLM_CALLS_PER_TURN` (default 20) — counts every provider contact, including fallback attempts.
+* `MAX_TOKENS_PER_TURN` (default 60000, best-effort from response usage metadata).
+* `MAX_TURN_SECONDS` (default 120) — accumulated **LLM call time**, not wall-clock. Human think-time (e.g. answering a clarification) and tool/DB latency do not count.
+
+When the budget is exhausted, `TurnBudgetExceeded` is raised, specialists degrade to a `failed` result, and the supervisor forces `end` so the turn closes gracefully instead of multiplying calls. The one exception is chart rendering from existing `structured_data`, which is deterministic and needs no LLM, so it is still allowed.
+
+Budget scope differs by entry point:
+
+* **CLI (`main.py`)**: one budget spans the logical turn, including the clarification interrupt/resume loop.
+* **Chainlit (`chat.py`)**: a clarification resume arrives as a new `on_message`, so the budget is effectively **per inbound message**, not per logical turn.
+
+Callers that invoke the graph directly (evaluation, unit tests) run without a budget.
 
 ### Long-Term Memory
 
@@ -122,6 +176,10 @@ DB_POOL_MAX_SIZE_ELEVATED=3
 DB_POOL_ACQUIRE_TIMEOUT=30
 DB_CONNECT_TIMEOUT=5
 CHART_STORAGE_DIR=.chainlit_charts
+RAG_NO_MATCH_DISTANCE_THRESHOLD=0.8  # max pgvector distance to count as a match
+MAX_LLM_CALLS_PER_TURN=20            # aggregate per user turn
+MAX_TOKENS_PER_TURN=60000            # best-effort; structured outputs may not report usage
+MAX_TURN_SECONDS=120                 # wall-clock per user turn
 ```
 
 Use `general` unless you are explicitly testing salary or credential paths.
@@ -234,6 +292,36 @@ Run integration tests:
 pytest -m integration
 ```
 
+### Prerequisites
+
+`pytest.ini` sets a default filter (`-m "not llm and not integration"`), so a plain `pytest` run never calls the LLM or touches the database.
+
+* **LLM tests** (`llm`): require `GROQ_API_KEY` or `OPENROUTER_API_KEY`.
+* **Integration tests** (`integration`): require a running Postgres (`docker compose up -d`) and the `DB_*` / `DATABASE_URL` environment variables.
+* **Postgres checkpointer tests**: additionally require `DATABASE_URL` and `CHECKPOINT_BACKEND=postgres`.
+
+### Test Commands
+
+| Command | What it runs |
+| --- | --- |
+| `pytest` | Unit tests only (default; excludes `llm` and `integration`) |
+| `pytest -m "not llm and not integration"` | Same as `pytest`, written explicitly |
+| `pytest -m llm` | Live LLM tests (`test_llm_*.py`, RAG grounding, SQL permission gating) |
+| `pytest -m integration` | Tests requiring live services (DB roles, checkpointer, pools, chart route) |
+| `pytest -m "llm or integration"` | All live tests |
+| `pytest -m "not llm"` | Unit + integration |
+| `pytest -m "not integration"` | Unit + LLM |
+| `pytest tests/test_routing.py -m` | A single test file |
+| `pytest tests/test_routing.py::test_name -m` | A single test |
+| `pytest -k "sql"` | Tests whose name matches a keyword |
+| `pytest tests/test_security_boundaries.py tests/test_sql_roles.py` | Security keyword boundaries + DB role boundaries |
+| `pytest --markers` | List registered markers |
+| `pytest --collect-only -q` | List tests without running them |
+| `pytest -v` | Verbose per-test output |
+| `pytest -x` | Stop on the first failure |
+
+To exclude a marker, quote the expression: `pytest -m "not llm"`. The form `pytest -m -llm` is not valid.
+
 ### Test Categories
 
 * **Unit**
@@ -243,7 +331,10 @@ pytest -m integration
   `test_llm_*.py`, SQL permission gating, and RAG grounding.
 
 * **Security**
-  `test_security_boundaries.py` and `test_sql_roles.py`. The database role is the actual enforcement point.
+  `test_security_boundaries.py` (keyword boundaries), `test_prompt_injection.py` (adversarial content at the `current_task`, RAG, web, and tool-result boundaries), and `test_sql_roles.py`. The database role is the actual enforcement point; the injection suite is deterministic and needs no live services.
+
+* **Budgets**
+  `test_budget.py` covers the per-turn call/token/wall-clock caps and graceful degradation, using a fake LLM and no network.
 
 ## Evaluation
 

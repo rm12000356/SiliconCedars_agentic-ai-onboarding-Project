@@ -24,8 +24,7 @@ def get_salary(employee_id: int) -> dict:
 
 @tool
 def get_user_credential(user_id: int) -> dict:
-    """
-    """
+    """Check whether a credential record exists for user_id. Returns {"found": bool}."""
     with get_elevated_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -41,7 +40,7 @@ def run_general_query(query_text: str) -> list[dict]:
     Executes agent-generated SQL through the restricted general_role
     connection. 
     """
-    if not query_text:
+    if not query_text or not query_text.strip():
         raise RuntimeError(
             "run_general_query called with an empty query_text. A valid "
             "SQL statement is required."

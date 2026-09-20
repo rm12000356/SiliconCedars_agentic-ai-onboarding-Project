@@ -1,5 +1,4 @@
 from langgraph.graph import StateGraph, START, END
-from services.memory import get_checkpointer
 from agents.finalize import Finalize
 from agents.memory_manager import memory_manager
 from state.state import SupervisorState, SubGraphSupervisorState
@@ -97,13 +96,8 @@ def sub_workflow():
     builder.add_edge("research", "controler")
     builder.add_edge("report", "controler")
 
-    graph =builder.compile()
-    
-    #png = graph.get_graph().draw_mermaid_png()
+    graph = builder.compile()
 
-    #with open("SubGraph_structure.png", "wb") as f:
-    #    f.write(png)
-        
     return graph
 
 if __name__ == "__main__":

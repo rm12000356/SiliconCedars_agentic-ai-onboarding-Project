@@ -1,18 +1,67 @@
 from __future__ import annotations
 
+import logging
+import re
 from typing import Optional
 
 from langchain_core.messages import HumanMessage
 
+logger = logging.getLogger(__name__)
+
 CLARIFICATION_ANSWER_FLAG = "is_clarification_answer"
 
-SENSITIVE_KEYWORDS = ("salary", "salaries", "credential", "password")
+SENSITIVE_PATTERNS = (
+    # Compensation / payroll
+    "salary",
+    "salaries",
+    "compensation",
+    "wage",
+    "wages",
+    "earnings",
+    "remuneration",
+    "payroll",
+    "paycheck",
+    "get paid",
+    "base pay",
+    "annual pay",
+    "pay rate",
+    "bonus",
+    # Credentials
+    "credential",
+    "credentials",
+    "password",
+    "password hash",
+    "api key",
+    "access token",
+    "client secret",
+    "secret key",
+)
+
+_SENSITIVE_RE = re.compile(
+    r"\b(?:" + "|".join(SENSITIVE_PATTERNS) + r")\b",
+    re.IGNORECASE,
+)
 
 
 def mentions_sensitive_data(text: str | None) -> bool:
-    """True if text mentions data guarded by elevated permissions."""
-    lowered = (text or "").lower()
-    return any(keyword in lowered for keyword in SENSITIVE_KEYWORDS)
+    """True if text mentions data guarded by elevated permissions.
+
+    This is a UX fast-path, not a security boundary. The actual boundary is
+    which tools are bound by ``permission_level`` and the Postgres role grants;
+    a missed synonym here cannot grant access to sensitive tables.
+    """
+    normalized = re.sub(r"\s+", " ", (text or "")).strip()
+    if not normalized:
+        return False
+
+    match = _SENSITIVE_RE.search(normalized)
+    if match:
+        logger.debug(
+            "sensitive_intent_detected",
+            extra={"matched": match.group(0).lower()},
+        )
+        return True
+    return False
 
 def content_to_text(content) -> str:
     """Normalise str | list[str|dict] (multimodal) content to a single string."""

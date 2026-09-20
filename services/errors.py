@@ -29,6 +29,21 @@ _AUTH_TOKENS = (
 )
 
 
+def _resolve_status(exc: Exception) -> int | None:
+    """HTTP status from the exception or a nested `.response`, if present."""
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status
+    http_status = getattr(exc, "http_status", None)
+    if isinstance(http_status, int):
+        return http_status
+    response = getattr(exc, "response", None)
+    nested = getattr(response, "status_code", None)
+    if isinstance(nested, int):
+        return nested
+    return None
+
+
 def classify_llm_error(exc: Exception) -> str | None:
     """
     'auth' | 'transient' | None (schema / unknown).
@@ -36,7 +51,7 @@ def classify_llm_error(exc: Exception) -> str | None:
     Prefer HTTP status on the exception when present so we don't
     substring-match '429' inside unrelated messages.
     """
-    status = getattr(exc, "status_code", None) or getattr(exc, "http_status", None)
+    status = _resolve_status(exc)
     if status in (401, 403):
         return "auth"
     if status in (408, 429, 500, 502, 503, 504):

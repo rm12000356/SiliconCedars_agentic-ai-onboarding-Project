@@ -156,6 +156,36 @@ def test_resolve_chart_type_accepts_bare_line_answer():
     assert _resolve_chart_type(state) == "line"
 
 
+class _ProviderError(Exception):
+    """Stand-in for a provider SDK error that is not RuntimeError/OSError."""
+
+
+class _RaisingStructured:
+    def invoke(self, *args, **kwargs):
+        raise _ProviderError("provider rejected the request")
+
+
+class _ProviderFailingLLM:
+    def with_structured_output(self, schema, **kwargs):
+        return _RaisingStructured()
+
+
+def test_provider_error_degrades_to_visualization_failed(monkeypatch):
+    monkeypatch.setattr(
+        visualization_agent, "llm", lambda *a, **k: _ProviderFailingLLM()
+    )
+    state = SupervisorState(
+        messages=[HumanMessage(content="show me a chart of 1, 2, 3")],
+        current_task="Create a chart from the numbers 1, 2, 3.",
+    )
+
+    result = Visualization(state)
+
+    assert result["last_result"].status == "failed"
+    assert result["last_result"].issue == "visualization_failed"
+    assert result["chart_path"] is None
+
+
 def test_structured_path_uses_clarification_chart_type(tmp_path, monkeypatch):
     monkeypatch.setattr(visualization_agent, "OUTPUT_DIR", tmp_path)
     captured = {}

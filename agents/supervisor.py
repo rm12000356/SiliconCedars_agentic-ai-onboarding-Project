@@ -17,21 +17,27 @@ from services.message_utils import (
 from services.llm import llm
 from services.memory import format_facts_for_prompt
 from services.errors import classify_llm_error
+from services.budget import get_budget, TurnBudgetExceeded
+from agents.clarification import DEFAULT_QUESTION
 
-logger = logging.getLogger("supervisor")
+logger = logging.getLogger(__name__)
 
 MAX_HOPS_PER_TURN = 6
 MAX_SAME_ROUTE_PER_TURN = 2
 MAX_CLARIFICATIONS_PER_TURN = 1
+
+
+def _end_decision() -> SupervisorDecision:
+    return SupervisorDecision(next="end", current_task="")
 
 SUPERVISOR_SYSTEM_PROMPT = """You are the routing supervisor for a company intelligence assistant.
 
 Decide the single best next route for the latest user request.
 
 ### Routes
-- rag: Internal company documents, policies, procedures, or organizational knowledge. Prefer this for almost all internal questions.
+- rag: Internal company documents, policies, procedures, lessons-learned, and organizational knowledge. Choose this when the answer lives in a document: what a policy says, what a procedure is, or what was learned from a past project. Do NOT use it for concrete records in the operational database.
 - research: External/public information. ONLY when the user explicitly asks to research, look up, or find external information. Never use for company topics.
-- sql: Needs live structured data (counts, sums, lists, filters, rankings, or any chart/visualization whose data has not been fetched yet).
+- sql: Live structured data from the operational database — counts, sums, lists, filters, rankings, and lookups of specific records such as one person's department, salary, or employee ID, a sale's amount/date, or a credential row. Choose sql whenever the answer is a field value in a table, even when the question names a person and is phrased like "What is <name>'s <field>?" or "Find the <id> for <name>".
 - visu: Only when structured_data already exists from a previous result and the user wants a chart/graph/plot.
 - convo: You can answer directly (greetings, goodbyes, definitions, small talk, clarifying your own previous answer, or light synthesis).
 - clarification: The request itself is genuinely unclear — you do not understand what the user wants. Do NOT use this just because the request might need multiple steps.
@@ -42,8 +48,24 @@ Decide the single best next route for the latest user request.
 - Prefer rag over research for anything internal.
 - Prefer convo over clarification whenever the request is understandable.
 - Goodbyes, thanks, and small talk → convo.
-- When in doubt between rag and sql, prefer the one that best matches the user's actual need.
--Focus almost exclusively on the latest user message and the latest specialist result, Ignore older conversation history unless it is directly needed to understand the current request
+- Facts about a specific record/entity in the database (a named person's department, salary, or ID; a sale row; a count or list of rows) → sql, even when phrased conversationally.
+- Questions about what a document/policy/procedure says, or what was learned from past projects → rag.
+- Definitions and general knowledge (e.g. "What does SQL stand for?", "What does RAG mean?") → convo, never sql.
+- Focus almost exclusively on the latest user message and the latest specialist result. Ignore older conversation history unless it is directly needed to understand the current request.
+
+### sql vs rag
+Decide by where the answer comes from:
+- A field inside a database table (employee, department, salary, sales, credentials, row counts) → sql.
+- A document, policy, procedure, or lessons-learned note → rag.
+
+### Examples
+- "How many employees are there?" → sql
+- "What is Alice Example's department?" → sql
+- "Find the employee ID for Rami Noueihed." → sql
+- "What is Rami Noueihed's salary?" → sql
+- "What is the company remote work policy?" → rag
+- "What did we learn about SQL security from past internal projects?" → rag
+- "What does SQL stand for?" → convo
 
 ### current_task
 - convo → short pre-summary of relevant context
@@ -97,6 +119,11 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
         try:
             context = gather_context(state, task_history, user_id)
             decision = get_supervisor_decision(context, llm())
+        except TurnBudgetExceeded as e:
+            # The turn is over budget: stop making decisions and let Finalize
+            # close out using whatever the specialists already produced.
+            logger.warning("supervisor_turn_budget_exceeded", extra={"error": str(e)})
+            decision = _end_decision()
         except Exception as e:
             raise RuntimeError(f"Supervisor LLM call failed: {e}") from e
 
@@ -139,12 +166,14 @@ def _generate_clarification_question(decision: SupervisorDecision) -> str:
         question = (result.question or "").strip()
         if question:
             return question
+    # Best-effort: any generation failure (provider, schema, budget) falls
+    # back to the canned question rather than breaking the turn.
     except Exception as e:
         logger.warning(
             "clarification_question_generation_failed",
             extra={"error": f"{type(e).__name__}: {e}"},
         )
-    return "Could you clarify what you'd like me to do?"
+    return DEFAULT_QUESTION
 
 
 def deterministic_decision(
@@ -160,24 +189,30 @@ def deterministic_decision(
             "hop_limit_reached",
             extra={"limit": MAX_HOPS_PER_TURN, "turn": current_turn},
         )
-        return SupervisorDecision(next="end", current_task="")
+        return _end_decision()
+
+    if (
+        lr is not None
+        and lr.status == "done"
+        and lr.structured_data
+        and _user_wants_visualization(state)
+    ):
+        logger.debug("structured_data_plus_visualization_intent")
+        return SupervisorDecision(
+            next="visu",
+            current_task="Create a clear chart from the structured_data of the previous result."
+        )
+
+    budget = get_budget()
+    if budget is not None and budget.exhausted():
+        logger.warning("turn_budget_exhausted_forcing_end")
+        return _end_decision()
 
     if lr is not None:
-        if (
-            lr.status == "done"
-            and lr.structured_data
-            and _user_wants_visualization(state)
-        ):
-            logger.debug("structured_data_plus_visualization_intent")
-            return SupervisorDecision(
-                next="visu",
-                current_task="Create a clear chart from the structured_data of the previous result."
-            )
-
         # Normal success → force end (prevents loops)
         if lr.status == "done":
             logger.debug("last_result_done_forcing_end")
-            return SupervisorDecision(next="end", current_task="")
+            return _end_decision()
         
 
         if lr.source == "rag" and lr.issue == "rag_unavailable":
@@ -192,7 +227,7 @@ def deterministic_decision(
             )
             if already_explained:
                 logger.debug("permission_denied_already_explained")
-                return SupervisorDecision(next="end", current_task="")
+                return _end_decision()
 
             logger.debug("permission_denied_routing_to_convo")
             return SupervisorDecision(
@@ -228,7 +263,7 @@ def deterministic_decision(
             )
 
     if not state.messages:
-        return SupervisorDecision(next="end", current_task="")
+        return _end_decision()
 
     return None  # residual → LLM
 
@@ -272,7 +307,7 @@ def post_decision_guards(
                 "same_route_cap_hit",
                 extra={"route": decision.next, "cap": MAX_SAME_ROUTE_PER_TURN},
             )
-            return SupervisorDecision(next="end", current_task="")
+            return _end_decision()
 
     if (
         state.last_result
@@ -283,7 +318,7 @@ def post_decision_guards(
             "refused_reroute_to_finished_specialist",
             extra={"route": decision.next},
         )
-        return SupervisorDecision(next="end", current_task="")
+        return _end_decision()
 
     # Only one clarification attempt per turn
     if decision.next == "clarification":
@@ -344,7 +379,7 @@ def enforce_task_history_guard(
             "blocked_duplicate_completed_task",
             extra={"route": decision.next, "task": proposed_task},
         )
-        return SupervisorDecision(next="end", current_task="")
+        return _end_decision()
 
     return decision
 
@@ -358,6 +393,8 @@ def gather_context(
     if user_id:
         try:
             known_facts = format_facts_for_prompt(user_id)
+        # Long-term memory is an enhancement; a DB failure must not block
+        # routing, so this deliberately degrades instead of narrowing.
         except Exception as e:
             logger.warning(
                 "known_facts_lookup_failed_continuing_without_it",
@@ -409,7 +446,7 @@ def build_prompt(context: dict, previous_error: str | None = None) -> list:
             )
         )
 
-    recent = context["messages"][-6:] if len(context["messages"]) > 6 else context["messages"]
+    recent = context["messages"][-6:]
     messages.extend(recent)
 
     if previous_error:
@@ -442,6 +479,9 @@ def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> Opti
                 structured = model.with_structured_output(SupervisorDecision, method=method)
                 raw = structured.invoke(prompt)
                 return SupervisorDecision.model_validate(raw)
+            except TurnBudgetExceeded:
+                # Not a schema/provider failure: don't retry, don't classify.
+                raise
             except Exception as e:
                 errors.append(f"{method}: {e}")
                 classes.append(classify_llm_error(e))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import threading
 
 from datetime import datetime, timezone
@@ -22,7 +23,7 @@ _CHECKPOINT_SERDE = JsonPlusSerializer(
 
 
 def get_checkpointer():
-    backend = os.getenv("CHECKPOINT_BACKEND", "memory").lower()
+    backend = os.getenv("CHECKPOINT_BACKEND", "memory").strip().lower()
 
     if backend == "postgres":
         conn_string = os.getenv("DATABASE_URL")
@@ -31,11 +32,20 @@ def get_checkpointer():
 
         saver = PostgresSaver.from_conn_string(conn_string)
         checkpointer = saver.__enter__()
-        checkpointer.setup()          # creates the checkpoint tables if needed
+        try:
+            checkpointer.setup()      # creates the checkpoint tables if needed
+        except Exception:
+            saver.__exit__(*sys.exc_info())
+            raise
         checkpointer.serde = _CHECKPOINT_SERDE
         return checkpointer , saver
 
-    return MemorySaver(serde=_CHECKPOINT_SERDE), None
+    if backend == "memory":
+        return MemorySaver(serde=_CHECKPOINT_SERDE), None
+
+    raise ValueError(
+        f"Unknown CHECKPOINT_BACKEND={backend!r}; expected 'memory' or 'postgres'"
+    )
 
 
 

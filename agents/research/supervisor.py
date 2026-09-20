@@ -1,8 +1,9 @@
 import logging
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from state.state import SubGraphSupervisorState , SubDecision
+from state.state import SubGraphSupervisorState, SubDecision
 from services.llm import llm
+from services.message_utils import content_to_text
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +78,10 @@ def _clean_latest_content(messages, max_chars: int = 2000) -> str:
     # Prefer the last AI message (usually the research note)
     for m in reversed(messages):
         if isinstance(m, AIMessage) and m.content:
-            text = m.content if isinstance(m.content, str) else str(m.content)
+            text = content_to_text(m.content)
             break
     else:
-        text = messages[-1].content if messages else ""
-        text = text if isinstance(text, str) else str(text)
+        text = content_to_text(messages[-1].content) if messages else ""
 
     # Light cleanup of obvious tool-call boilerplate
     for noise in ("tool call:", "tool result:", "args=", "FunctionMessage"):

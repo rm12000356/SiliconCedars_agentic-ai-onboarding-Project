@@ -1,6 +1,5 @@
 import logging
 import math
-import os
 import re
 from pathlib import Path
 from typing import Literal
@@ -13,7 +12,7 @@ import matplotlib.pyplot as plt
 
 from state.state import SupervisorState, SpecialistResult, ChartSpec
 from services.llm import llm
-from langchain_core.messages import HumanMessage
+from services.budget import TurnBudgetExceeded
 from services.message_utils import clarification_answers, latest_user_request
 
 OUTPUT_DIR = Path("outputs")
@@ -99,6 +98,15 @@ def Visualization(state: SupervisorState) -> dict:
             "chart_path": str(filepath),
         }
 
+    except TurnBudgetExceeded as exc:
+        logger.warning("[VISU] turn budget exceeded: %s", exc)
+
+        return _failed_result(
+            "This request could not be completed within the allowed budget "
+            "for a single turn.",
+            "budget_exceeded",
+        )
+
     except ValueError as exc:
         logger.warning("[VISU] validation failure: %s", exc)
 
@@ -169,9 +177,6 @@ def _extract_structured_rows(rows: list[dict]) -> ChartSpec:
 
         labels.append(label)
         values.append(value)
-
-    if len(labels) != len(values):
-        raise ValueError("Labels and values must have the same length.")
 
     return ChartSpec(
         chart_type="bar",

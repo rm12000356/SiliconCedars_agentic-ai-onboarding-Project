@@ -3,6 +3,7 @@ import logging
 from langchain_core.messages import SystemMessage
 from state.state import SupervisorState, SpecialistResult
 from services.llm import llm
+from services.budget import TurnBudgetExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +33,25 @@ def Convo(state: SupervisorState) -> dict:
 
     model = llm()
 
-    recent = state.messages[-6:] if len(state.messages) > 6 else state.messages
+    recent = state.messages[-6:]
     system = f"{CONVO_SYSTEM_PROMPT}\n\nTask: {state.current_task}"
     msg = [SystemMessage(content=system), *recent]
 
-    response = model.invoke(msg)
+    try:
+        response = model.invoke(msg)
+    except TurnBudgetExceeded as e:
+        logger.warning("[CONVO] turn budget exceeded: %s", e)
+        return {
+            "last_result": SpecialistResult(
+                source="convo",
+                summary=(
+                    "This request could not be completed within the allowed "
+                    "budget for a single turn."
+                ),
+                status="failed",
+                issue="budget_exceeded",
+            )
+        }
 
     result = SpecialistResult(
         source="convo",

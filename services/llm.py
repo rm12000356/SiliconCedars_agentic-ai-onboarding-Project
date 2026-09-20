@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Callable
 
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
+
+from services.budget import get_budget
 
 load_dotenv()
 
@@ -96,9 +99,13 @@ class ResilientLLM:
         return client
 
     def invoke(self, *args, **kwargs):
+        budget = get_budget()
         last_exc: Exception | None = None
 
         for label, factory in self._candidates:
+            if budget is not None:
+                budget.check_and_count()
+
             try:
                 client = self._build(factory)
             except Exception as e:
@@ -109,10 +116,13 @@ class ResilientLLM:
                 last_exc = e
                 continue
 
+            started = time.monotonic()
             try:
                 logger.info("[LLM] Trying %s", label)
-                return client.invoke(*args, **kwargs)
+                response = client.invoke(*args, **kwargs)
             except Exception as e:
+                if budget is not None:
+                    budget.record_duration(time.monotonic() - started)
                 last_exc = e
                 if _is_retryable(e):
                     logger.warning(
@@ -126,6 +136,11 @@ class ResilientLLM:
                 )
                 raise
 
+            if budget is not None:
+                budget.record_duration(time.monotonic() - started)
+                budget.record_usage(response)
+            return response
+
         raise RuntimeError(
             "All configured LLM models failed. "
             f"Last error: {type(last_exc).__name__ if last_exc else '?'}: {last_exc}. "
@@ -134,6 +149,8 @@ class ResilientLLM:
 
 
 def _make_groq(model_name: str) -> ChatGroq:
+    if not os.getenv("GROQ_API_KEY"):
+        raise RuntimeError("GROQ_API_KEY is missing from .env")
     return ChatGroq(model=model_name)
 
 
