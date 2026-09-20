@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage
 import pytest
 
 from agents.supervisor import (
+    MAX_PLAN_STEPS,
     gather_context,
     get_supervisor_decision,
     get_workflow_plan,
@@ -251,18 +252,87 @@ def _plan_routes(prompt: str) -> list[str]:
     return [item.route for item in get_workflow_plan(context, llm())]
 
 
-def test_llm_planner_decomposes_multi_intent():
+PLANNER_CASES = [
+    # Single-intent requests.
+    ("How many employees are there?", ["sql"]),
+    ("What does our remote work policy say?", ["rag"]),
+    ("Who is the current CEO of OpenAI?", ["research"]),
+    ("Hello, how are you?", ["convo"]),
+    ("Tell me about the numbers.", ["clarification"]),
+    # Two distinct asks, in the order they should run.
+    (
+        "How many employees are there, and what does the remote work policy say?",
+        ["sql", "rag"],
+    ),
+    ("Show sales by region as a pie chart.", ["sql", "visu"]),
+    (
+        "How many employees do we have, and what is the current price of gold?",
+        ["sql", "research"],
+    ),
+    (
+        "Who is the current CEO of Tesla, and how many employees do we have?",
+        ["research", "sql"],
+    ),
+    # Inline chart data needs no sql step.
+    ("Make a pie chart: 60% EU, 25% MENA, 15% APAC.", ["visu"]),
+    # Three distinct asks.
+    (
+        "How many employees are there, who is the current CEO of OpenAI, "
+        "and what does our remote work policy say?",
+        ["sql", "research", "rag"],
+    ),
+    (
+        "Show sales by region as a pie chart, and what does the remote work policy say?",
+        ["sql", "visu", "rag"],
+    ),
+    (
+        "Who is the current CEO of Tesla, how many employees do we have, "
+        "and chart the sales by region.",
+        ["research", "sql", "visu"],
+    ),
+]
+
+
+@pytest.mark.parametrize("prompt,expected", PLANNER_CASES)
+def test_llm_planner_decomposes_workflows(prompt, expected):
+    assert _plan_routes(prompt) == expected
+
+
+# Order-ambiguous pairs: the planner may reasonably put the database count
+# before or after the document lookup, so assert the set, not the order.
+PLANNER_UNORDERED_CASES = [
+    (
+        "What does our remote work policy say, and how many employees are there?",
+        {"rag", "sql"},
+    ),
+    (
+        "Summarize our lessons on state design, and count the sales rows.",
+        {"rag", "sql"},
+    ),
+]
+
+
+@pytest.mark.parametrize("prompt,expected", PLANNER_UNORDERED_CASES)
+def test_llm_planner_decomposes_unordered_workflows(prompt, expected):
+    assert set(_plan_routes(prompt)) == expected
+
+
+def test_llm_planner_handles_greeting_plus_tasks():
+    """A greeting may or may not become its own step; the tasks must appear in
+    order regardless."""
     routes = _plan_routes(
-        "How many employees are there, and what does the remote work policy say?"
+        "Hi! Who is the current CEO of OpenAI, and how many employees do we have?"
     )
-    assert routes == ["sql", "rag"]
+    assert [route for route in routes if route != "convo"] == ["research", "sql"]
 
 
-def test_llm_planner_decomposes_chart_request():
-    routes = _plan_routes("Show sales by region as a pie chart.")
-    assert routes == ["sql", "visu"]
-
-
-def test_llm_planner_single_intent():
-    routes = _plan_routes("What is the company remote work policy?")
-    assert routes == ["rag"]
+def test_llm_planner_caps_long_requests():
+    routes = _plan_routes(
+        "How many employees are there, what does the policy say, "
+        "who is the current CEO of OpenAI, and chart the sales by region."
+    )
+    assert len(routes) <= MAX_PLAN_STEPS
+    assert all(
+        route in {"rag", "convo", "sql", "research", "visu", "clarification"}
+        for route in routes
+    )

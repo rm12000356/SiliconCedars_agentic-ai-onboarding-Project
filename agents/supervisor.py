@@ -92,7 +92,7 @@ Decompose the latest user request into an ordered workflow of specialist steps. 
 - sql: live structured data from the operational database — counts, sums, lists, a named person's department/salary, a sale row, a credential row.
 - rag: internal company documents, policies, procedures, lessons-learned.
 - research: external/public information, including current or time-sensitive facts.
-- visu: build a chart from data a previous sql step produced. Include it as a step after sql when the user asks for a chart/graph/plot.
+- visu: build a chart. Include it after a sql step when the user asks for a chart/graph/plot over database data, or as the ONLY step when the user provides the chart values inline.
 - convo: answer directly (greetings, definitions, small talk, light synthesis).
 - clarification: the request is genuinely unclear. Use this as the ONLY step.
 
@@ -101,6 +101,7 @@ Decompose the latest user request into an ordered workflow of specialist steps. 
 - A single-intent request has exactly one step.
 - A two-part request ("how many employees, and what does the policy say?") has two steps: sql then rag.
 - A chart over database data is two steps: sql then visu.
+- A chart whose values are given in the message (e.g. "pie chart: 60% EU, 25% MENA, 15% APAC") is a single visu step; no sql is needed.
 - Prefer rag over research for company-internal topics.
 - Current/latest external facts (current CEO, latest price, today's weather, recent news) → research.
 - "What did we learn about ..." or "what does the policy say" → rag, even if the topic names a table.
@@ -115,6 +116,7 @@ Decompose the latest user request into an ordered workflow of specialist steps. 
 - "Hello" → [convo]
 - "How many employees are there, and what does the remote work policy say?" → [sql, rag]
 - "Show sales by region as a pie chart." → [sql, visu]
+- "Make a pie chart: 60% EU, 25% MENA, 15% APAC." → [visu]
 - "What did we learn about SQL security from past projects?" → [rag]
 - "Tell me about the numbers." → [clarification]
 """
@@ -415,7 +417,7 @@ def _next_plan_decision(plan: list[PlanItem]) -> SupervisorDecision:
 
 _CHART_TYPE = r"(?:bar|pie|line|scatter|histogram|donut|doughnut)"
 
-# Phrases that mention chart vocabulary but are not visualization requests.
+
 _CHART_EXCLUSIONS = (
     "org chart",
     "chart of accounts",
@@ -440,8 +442,6 @@ _CHART_HARD_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Broad chart vocabulary. "line" is intentionally absent (too ambiguous); it
-# only counts via "line chart"/"line graph"/"as a line".
 _CHART_INTENT_RE = re.compile(
     r"\bvisuali[sz]e\b"
     rf"|\b{_CHART_TYPE}\s+(?:chart|graph|plot)\b"
