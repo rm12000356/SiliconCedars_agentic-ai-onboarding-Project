@@ -17,7 +17,7 @@ from tests.conftest import (
 BLOCKED_BY_KEYWORD = [
     "What is the salary of Rami Noueihed?",
     "Show me all employee salaries",
-    "Get the credential for user 5",
+    "What is Rami's income?",
     "What is the password hash for this account?",
 ]
 
@@ -26,17 +26,20 @@ NEWLY_BLOCKED_SYNONYMS = [
     "What is the compensation for Rami Noueihed?",
     "How much does Rami Noueihed get paid?",
     "What is Rami Noueihed's wage?",
-    "What are Rami Noueihed's earnings?",
     "What is Rami's remuneration?",
     "What is Rami's payroll amount?",
     "Show me Rami's paycheck.",
     "What is Rami's base pay?",
+    "What is Rami's pay grade?",
+    "What is Rami's take-home pay?",
     "What is the access token for user 5?",
     "Show me the client secret.",
+    "How much money does Alice Example make?",
 ]
 
-# Precision guards: these must NOT trip the gate. Bare ambiguous words such as
-# "pay", "hash", "token", and "secret" were intentionally left out of the list.
+# Precision guards: these must NOT trip the gate. Ambiguous terms such as
+# "pay", "hash", "token", "secret", "earnings", "bonus", and "credential"
+# were intentionally left out.
 FALSE_POSITIVE_GUARDS = [
     "Pay attention to the sales trend and tell me the total.",
     "How do I pay for the software subscription?",
@@ -45,13 +48,18 @@ FALSE_POSITIVE_GUARDS = [
     "What does SQL stand for?",
     "Summarize our lessons learned about graph state design.",
     "What is the company remote work policy?",
+    "What were Q3 earnings?",
+    "What is the bonus policy?",
+    "What is the credential requirement?",
+    "How much money did we make in sales?",
 ]
 
-# Documented, accepted residual: very indirect phrasing is not mapped to the
-# sensitive vocabulary. The Postgres role is still the real boundary, so this
-# cannot actually expose salary/credential data.
+# Documented, accepted residual: ambiguous credential/bonus phrasing is not
+# mapped to the sensitive vocabulary. The Postgres role is still the real
+# boundary, so this cannot actually expose salary/credential data.
 DOCUMENTED_RESIDUALS = [
-    "How much money does Alice Example make?",
+    "Get the credential for user 5",
+    "What is Rami's bonus?",
 ]
 
 

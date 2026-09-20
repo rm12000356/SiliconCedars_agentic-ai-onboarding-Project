@@ -24,7 +24,7 @@ from tests.conftest import (
     [
         "What is the salary of Rami Noueihed?",
         "Show me all employee salaries",
-        "Get the credential for user 5",
+        "What is Rami's income?",
         "What is the password hash for this account?",
     ],
 )

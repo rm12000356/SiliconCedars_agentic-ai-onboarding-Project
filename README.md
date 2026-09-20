@@ -68,7 +68,7 @@ Sensitive data such as salaries and credentials is protected by three layers, on
 | --- | --- | --- |
 | 1 | Tool binding by `permission_level` (`agents/sql_agent.py`) | A `general` user is never bound `get_salary` / `get_user_credential`, so the model cannot call them |
 | 2 | PostgreSQL role grants (`db/init/02_roles.sql`) | **The actual security boundary.** `general_role` has no grants on `salaries` or `credentials`, and cannot even see them in `information_schema` |
-| 3 | Sensitive-intent gate (`services/message_utils.py`) | UX fast-path only. A precision-first synonym/regex list gives a clear denial instead of a database error |
+| 3 | Sensitive-intent gate (`services/message_utils.py`) | UX fast-path only. A precision-first list of clear compensation/credential phrasings gives a clear denial instead of a database error; ambiguous terms (`earnings`, `bonus`, `credential`) are deliberately excluded to avoid false positives |
 
 The keyword gate is deliberately **not** a security control: a missed synonym cannot grant access, because layer 2 still denies the query. An LLM-based classifier is intentionally not used for authorization, consistent with the project lesson that authorization must not be enforced by model judgment.
 
