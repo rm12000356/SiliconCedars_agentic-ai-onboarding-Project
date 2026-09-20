@@ -53,3 +53,44 @@ def test_tool_use_failed_is_schema_not_infra():
 
 def test_bare_digits_in_unrelated_message_are_not_transient():
     assert classify_llm_error(RuntimeError("see line 429 in parser")) is None
+
+
+_AGGREGATE = (
+    "All configured LLM models failed. Last error: RateLimitError. "
+    "Check GROQ_API_KEY, OPENROUTER_API_KEY and model names."
+)
+
+
+def test_aggregate_api_key_trailer_alone_is_not_auth():
+    # The wrapper message mentions API keys but wraps no provider error.
+    assert classify_llm_error(RuntimeError(_AGGREGATE)) is None
+
+
+def test_aggregate_is_classified_by_chained_429():
+    try:
+        try:
+            raise _HttpError(429, "Too Many Requests")
+        except _HttpError as cause:
+            raise RuntimeError(_AGGREGATE) from cause
+    except RuntimeError as exc:
+        assert classify_llm_error(exc) == "transient"
+
+
+def test_aggregate_is_classified_by_chained_401():
+    try:
+        try:
+            raise _HttpError(401, "Unauthorized")
+        except _HttpError as cause:
+            raise RuntimeError(_AGGREGATE) from cause
+    except RuntimeError as exc:
+        assert classify_llm_error(exc) == "auth"
+
+
+def test_aggregate_is_classified_by_chained_timeout():
+    try:
+        try:
+            raise TimeoutError("the request timed out")
+        except TimeoutError as cause:
+            raise RuntimeError(_AGGREGATE) from cause
+    except RuntimeError as exc:
+        assert classify_llm_error(exc) == "transient"

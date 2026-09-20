@@ -145,7 +145,7 @@ class ResilientLLM:
             "All configured LLM models failed. "
             f"Last error: {type(last_exc).__name__ if last_exc else '?'}: {last_exc}. "
             "Check GROQ_API_KEY, OPENROUTER_API_KEY and model names."
-        )
+        ) from last_exc
 
 
 def _make_groq(model_name: str) -> ChatGroq:
