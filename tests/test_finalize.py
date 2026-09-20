@@ -7,7 +7,7 @@ from agents.finalize import (
     OUTAGE_MESSAGE,
     _might_contain_memorable_info,
 )
-from state.state import SpecialistResult, SupervisorState
+from state.state import PlanItem, SpecialistResult, SupervisorState
 
 
 def _config() -> RunnableConfig:
@@ -58,6 +58,56 @@ def test_specialist_answer_is_appended_exactly_once():
     assert "messages" in update
     assert len(update["messages"]) == 1
     assert update["messages"][0].content == "Hi there!"
+
+
+def _two_step_state() -> SupervisorState:
+    return SupervisorState(
+        messages=[HumanMessage(content="count employees and the policy")],
+        plan=[
+            PlanItem(
+                route="sql", task="count", status="done", result_summary="2 employees"
+            ),
+            PlanItem(
+                route="rag",
+                task="policy",
+                status="done",
+                result_summary="The policy is documented.",
+            ),
+        ],
+        turn_count=1,
+    )
+
+
+def test_multiple_plan_results_are_synthesized(monkeypatch):
+    class _Response:
+        content = "There are 2 employees, and the policy is documented."
+
+    class _Model:
+        def invoke(self, _messages):
+            return _Response()
+
+    monkeypatch.setattr("agents.finalize.llm", lambda *a, **k: _Model())
+
+    update = Finalize(_two_step_state(), _config())
+
+    assert (
+        update["messages"][0].content
+        == "There are 2 employees, and the policy is documented."
+    )
+
+
+def test_synthesis_failure_falls_back_to_concatenation(monkeypatch):
+    class _Model:
+        def invoke(self, _messages):
+            raise RuntimeError("provider down")
+
+    monkeypatch.setattr("agents.finalize.llm", lambda *a, **k: _Model())
+
+    update = Finalize(_two_step_state(), _config())
+    content = update["messages"][0].content
+
+    assert "2 employees" in content
+    assert "The policy is documented." in content
 
 
 def test_outage_emits_static_message_without_llm(monkeypatch):
