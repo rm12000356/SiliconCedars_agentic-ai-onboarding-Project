@@ -5,9 +5,10 @@ from agents.finalize import (
     Finalize,
     NO_ANSWER_FALLBACK,
     OUTAGE_MESSAGE,
+    TURN_CUT_SHORT_NOTE,
     _might_contain_memorable_info,
 )
-from state.state import SpecialistResult, SupervisorState
+from state.state import PlanItem, SpecialistResult, SupervisorState
 
 
 def _config() -> RunnableConfig:
@@ -58,6 +59,56 @@ def test_specialist_answer_is_appended_exactly_once():
     assert "messages" in update
     assert len(update["messages"]) == 1
     assert update["messages"][0].content == "Hi there!"
+
+
+def _two_step_state() -> SupervisorState:
+    return SupervisorState(
+        messages=[HumanMessage(content="count employees and the policy")],
+        plan=[
+            PlanItem(
+                route="sql", task="count", status="done", result_summary="2 employees"
+            ),
+            PlanItem(
+                route="rag",
+                task="policy",
+                status="done",
+                result_summary="The policy is documented.",
+            ),
+        ],
+        turn_count=1,
+    )
+
+
+def test_multiple_plan_results_are_synthesized(monkeypatch):
+    class _Response:
+        content = "There are 2 employees, and the policy is documented."
+
+    class _Model:
+        def invoke(self, _messages):
+            return _Response()
+
+    monkeypatch.setattr("agents.finalize.llm", lambda *a, **k: _Model())
+
+    update = Finalize(_two_step_state(), _config())
+
+    assert (
+        update["messages"][0].content
+        == "There are 2 employees, and the policy is documented."
+    )
+
+
+def test_synthesis_failure_falls_back_to_concatenation(monkeypatch):
+    class _Model:
+        def invoke(self, _messages):
+            raise RuntimeError("provider down")
+
+    monkeypatch.setattr("agents.finalize.llm", lambda *a, **k: _Model())
+
+    update = Finalize(_two_step_state(), _config())
+    content = update["messages"][0].content
+
+    assert "2 employees" in content
+    assert "The policy is documented." in content
 
 
 def test_outage_emits_static_message_without_llm(monkeypatch):
@@ -116,6 +167,66 @@ def test_known_issue_uses_user_facing_message():
     update = Finalize(state, _config())
 
     assert "permission" in update["messages"][0].content.lower()
+
+
+def test_skipped_step_uses_user_facing_message():
+    state = SupervisorState(
+        messages=[HumanMessage(content="chart sales")],
+        plan=[
+            PlanItem(
+                route="visu",
+                task="chart",
+                status="skipped",
+                issue="no_data_for_chart",
+                result_summary="The chart was skipped because the data was unavailable.",
+            )
+        ],
+        turn_count=1,
+    )
+
+    update = Finalize(state, _config())
+    content = update["messages"][0].content
+
+    assert "chart" in content.lower()
+    assert "data it needed" in content.lower()
+
+
+def test_plan_note_is_appended():
+    state = SupervisorState(
+        messages=[HumanMessage(content="do many things")],
+        plan=[
+            PlanItem(
+                route="sql", task="count", status="done", result_summary="2 employees"
+            )
+        ],
+        turn_count=1,
+        plan_note="I focused on the first 3 of 5 requested steps. Not covered: x.",
+    )
+
+    update = Finalize(state, _config())
+    content = update["messages"][0].content
+
+    assert "2 employees" in content
+    assert "Not covered" in content
+
+
+def test_turn_cut_short_note_is_appended_once():
+    state = SupervisorState(
+        messages=[HumanMessage(content="do many things")],
+        plan=[
+            PlanItem(
+                route="sql", task="count", status="done", result_summary="2 employees"
+            )
+        ],
+        turn_count=1,
+        turn_cut_short=True,
+    )
+
+    update = Finalize(state, _config())
+    content = update["messages"][0].content
+
+    assert "2 employees" in content
+    assert content.count(TURN_CUT_SHORT_NOTE) == 1
 
 
 def test_bare_im_does_not_trigger_memory_extraction():

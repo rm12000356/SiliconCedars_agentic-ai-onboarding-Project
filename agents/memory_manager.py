@@ -19,6 +19,11 @@ def memory_manager(state: SupervisorState) -> dict:
     update["turn_count"] = new_turn
     update["clarification_count"] = 0
     update["chart_path"] = None
+    update["plan"] = []
+    update["plan_ready"] = False
+    update["hops"] = 0
+    update["plan_note"] = None
+    update["turn_cut_short"] = False
     logger.info("[MEMORY] starting turn %s", new_turn)
 
     if len(state.messages) > MESSAGE_THRESHOLD:

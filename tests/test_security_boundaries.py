@@ -17,26 +17,31 @@ from tests.conftest import (
 BLOCKED_BY_KEYWORD = [
     "What is the salary of Rami Noueihed?",
     "Show me all employee salaries",
-    "Get the credential for user 5",
     "What is the password hash for this account?",
+    "What is the api key for the service?",
 ]
 
-# Synonyms that used to bypass the gate; they are covered now.
-NEWLY_BLOCKED_SYNONYMS = [
+# After simplifying the gate to unambiguous terms, these ambiguous synonyms
+# are deliberately not matched by the keyword gate. The Postgres role and the
+# InsufficientPrivilege -> permission_denied mapping remain the real boundary,
+# so they still cannot expose the data.
+AMBIGUOUS_RESIDUALS = [
+    "What is Rami's income?",
     "What is the compensation for Rami Noueihed?",
     "How much does Rami Noueihed get paid?",
     "What is Rami Noueihed's wage?",
-    "What are Rami Noueihed's earnings?",
     "What is Rami's remuneration?",
     "What is Rami's payroll amount?",
     "Show me Rami's paycheck.",
     "What is Rami's base pay?",
+    "What is Rami's pay grade?",
+    "What is Rami's take-home pay?",
     "What is the access token for user 5?",
     "Show me the client secret.",
+    "How much money does Alice Example make?",
 ]
 
-# Precision guards: these must NOT trip the gate. Bare ambiguous words such as
-# "pay", "hash", "token", and "secret" were intentionally left out of the list.
+# Precision guards: these must NOT trip the gate.
 FALSE_POSITIVE_GUARDS = [
     "Pay attention to the sales trend and tell me the total.",
     "How do I pay for the software subscription?",
@@ -45,13 +50,18 @@ FALSE_POSITIVE_GUARDS = [
     "What does SQL stand for?",
     "Summarize our lessons learned about graph state design.",
     "What is the company remote work policy?",
+    "What were Q3 earnings?",
+    "What is the bonus policy?",
+    "What is the credential requirement?",
+    "How much money did we make in sales?",
 ]
 
-# Documented, accepted residual: very indirect phrasing is not mapped to the
-# sensitive vocabulary. The Postgres role is still the real boundary, so this
-# cannot actually expose salary/credential data.
+# Documented, accepted residual: ambiguous credential/bonus phrasing is not
+# mapped to the sensitive vocabulary. The Postgres role is still the real
+# boundary, so this cannot actually expose salary/credential data.
 DOCUMENTED_RESIDUALS = [
-    "How much money does Alice Example make?",
+    "Get the credential for user 5",
+    "What is Rami's bonus?",
 ]
 
 
@@ -62,9 +72,9 @@ def test_keyword_gate_blocks_obvious_sensitive_words(task):
     assert result.status == "failed"
 
 
-@pytest.mark.parametrize("task", NEWLY_BLOCKED_SYNONYMS)
-def test_synonyms_are_now_covered_by_keyword_list(task):
-    assert mentions_sensitive_data(task)
+@pytest.mark.parametrize("task", AMBIGUOUS_RESIDUALS)
+def test_ambiguous_synonyms_are_not_matched_by_the_gate(task):
+    assert not mentions_sensitive_data(task)
 
 
 @pytest.mark.parametrize("text", FALSE_POSITIVE_GUARDS)
@@ -121,3 +131,44 @@ def test_synonym_under_general_does_not_leak_salary_figure():
         make_config("general"),
     )["last_result"]
     assert_absent_salary(result.summary or "", 95000)
+
+
+@pytest.mark.integration
+@requires_db
+def test_db_privilege_denial_maps_to_permission_message(monkeypatch):
+    """A general user querying salaries through SQL is denied by the role; the
+    denial must surface as permission_denied and a permission message to the
+    user, not as improvised model text."""
+    from langchain_core.messages import AIMessage
+
+    from agents.finalize import Finalize
+
+    class _ScriptedLLM:
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def invoke(self, messages):
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "run_general_query",
+                        "args": {"query_text": "SELECT * FROM salaries"},
+                        "id": "call_1",
+                    }
+                ],
+            )
+
+    monkeypatch.setattr("agents.sql_agent.llm", lambda *a, **k: _ScriptedLLM())
+
+    # "payroll" phrasing does not trip the keyword gate, so the request really
+    # reaches the database and is denied by the role.
+    state = make_sql_state("List all payroll records from the database.")
+    result = Sql_agent(state, make_config("general"))["last_result"]
+
+    assert result.status == "failed"
+    assert result.issue == "permission_denied"
+
+    state.last_result = result
+    update = Finalize(state, {"configurable": {}})
+    assert "permission" in update["messages"][0].content.lower()

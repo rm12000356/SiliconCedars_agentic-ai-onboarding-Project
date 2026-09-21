@@ -22,11 +22,20 @@ PRIMARY_MODEL = "openai/gpt-oss-120b"
 # model, so it must not be in the fallback chain.
 FALLBACK_MODELS = [
     "openai/gpt-oss-20b",
-    "qwen/qwen3-32b",
+    "qwen/qwen3.8-27b",
 ]
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504, 529}
 NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 422}
+
+# A 400 that is a model-specific function-calling/schema failure should fall
+# through to the next candidate, not abort the whole chain. Generic 400s
+# (e.g. context length) stay non-retryable.
+FALLTHROUGH_400_MARKERS = (
+    "tool_use_failed",
+    "failed_generation",
+    "tool call validation",
+)
 
 
 RETRYABLE_TEXT_MARKERS = (
@@ -59,17 +68,19 @@ def _resolve_status(exc: Exception) -> int | None:
 
 def _is_retryable(exc: Exception) -> bool:
     status = _resolve_status(exc)
+    text = str(exc).lower()
 
     # An explicit status is authoritative in both directions.
     if status is not None:
         if status in RETRYABLE_STATUS_CODES:
+            return True
+        if status == 400 and any(m in text for m in FALLTHROUGH_400_MARKERS):
             return True
         if status in NON_RETRYABLE_STATUS_CODES:
             return False
         # Unknown status (e.g. 404 decommissioned): fall through to the text
         # markers below.
 
-    text = str(exc).lower()
     return any(marker in text for marker in RETRYABLE_TEXT_MARKERS)
 
 class ResilientLLM:

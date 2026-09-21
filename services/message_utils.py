@@ -10,31 +10,16 @@ logger = logging.getLogger(__name__)
 
 CLARIFICATION_ANSWER_FLAG = "is_clarification_answer"
 
+# Unambiguous compensation/credential terms only. Ambiguous synonyms
+# ("compensation", "bonus", "income", "access token", "how much does X make")
+# are deliberately excluded; the Postgres role remains the security boundary,
+# and Finalize maps a real denial to a user-facing permission message.
 SENSITIVE_PATTERNS = (
-    # Compensation / payroll
     "salary",
     "salaries",
-    "compensation",
-    "wage",
-    "wages",
-    "earnings",
-    "remuneration",
-    "payroll",
-    "paycheck",
-    "get paid",
-    "base pay",
-    "annual pay",
-    "pay rate",
-    "bonus",
-    # Credentials
-    "credential",
-    "credentials",
     "password",
     "password hash",
     "api key",
-    "access token",
-    "client secret",
-    "secret key",
 )
 
 _SENSITIVE_RE = re.compile(

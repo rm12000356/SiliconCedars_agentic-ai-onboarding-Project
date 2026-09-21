@@ -25,6 +25,15 @@ SpecialistRoute = Literal[
     "visu"
 ]
 
+PlanRoute = Literal[
+    "rag",
+    "convo",
+    "sql",
+    "research",
+    "visu",
+    "clarification",
+]
+
 SubRoute = Literal[
     "researcher",
     "report",
@@ -81,6 +90,38 @@ class TaskRecord(BaseModel):
 
 
 
+class PlanItem(BaseModel):
+    """One step of the up-front workflow plan.
+
+    The supervisor's LLM decomposes the request into steps once per turn;
+    execution then advances deterministically and writes each step's result
+    back here, so Finalize can combine every completed result.
+    """
+
+    route: PlanRoute = Field(description="Specialist that runs this step")
+    task: str = Field(description="Concrete task for that specialist")
+    status: Literal["pending", "done", "failed", "skipped"] = Field(
+        default="pending",
+        description="Execution status of this plan step.",
+    )
+    result_summary: Optional[str] = Field(
+        default=None, description="The step's synthesized result, if it ran."
+    )
+    issue: Optional[str] = Field(
+        default=None, description="Structured issue code if the step failed."
+    )
+    structured_data: Optional[list[dict]] = Field(
+        default=None,
+        description="Chartable label/value rows, when the step produced them.",
+    )
+    data_source: Optional[Literal["database", "inline"]] = Field(
+        default=None,
+        description="For visu steps: 'database' charts structured_data from an "
+                    "earlier sql step; 'inline' charts values supplied by the "
+                    "user. None for non-visu steps.",
+    )
+
+
 class SupervisorState(BaseModel):
     messages: Annotated[List[AnyMessage], add_messages] = Field(
         description="Full conversation history; specialists get a filtered slice "
@@ -103,6 +144,16 @@ class SupervisorState(BaseModel):
     task_history: List[TaskRecord] = Field(
         default_factory=list,
         description="Specialist invocations so far: the concrete task and its outcome."
+    )
+    plan: List[PlanItem] = Field(
+        default_factory=list,
+        description="Up-front workflow plan for the turn; each item accumulates "
+                    "its own result. Reset by memory_manager."
+    )
+    plan_ready: bool = Field(
+        default=False,
+        description="True once the planner has produced this turn's plan; "
+                    "cleared on clarification resume and each new turn."
     )
     turn_count: int = Field(
         default=0,
@@ -133,6 +184,20 @@ class SupervisorState(BaseModel):
         description="Set when the turn ended because no LLM provider was "
                     "usable, so Finalize emits a static message without calling "
                     "the model again."
+    )
+    hops: int = Field(
+        default=0,
+        description="Routed steps taken this turn; reset by memory_manager and "
+                    "capped by MAX_HOPS as a loop backstop."
+    )
+    plan_note: Optional[str] = Field(
+        default=None,
+        description="User-facing note when the planner produced more asks than "
+                    "MAX_PLAN_STEPS and the rest were dropped."
+    )
+    turn_cut_short: bool = Field(
+        default=False,
+        description="Set when the hop cap ended the turn early; Finalize says so."
     )
 
 

@@ -1,4 +1,5 @@
 import logging
+from typing import NamedTuple, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
@@ -28,6 +29,11 @@ OUTAGE_MESSAGE = (
     "Please try again in a moment."
 )
 
+TURN_CUT_SHORT_NOTE = (
+    "This turn was cut short because it needed more steps than the "
+    "assistant allows in one go. Please narrow the request."
+)
+
 # User-facing text for known internal failure codes. Raw issue strings can
 # contain database/provider errors and must never be shown to the user.
 _GENERIC_FAILURE = "I wasn't able to complete that request."
@@ -50,13 +56,77 @@ _ISSUE_MESSAGES = {
     "research_empty_report": "The research step didn't produce a usable report.",
     "visualization_failed": "I couldn't generate that chart.",
     "invalid_chart_spec": "That request didn't contain valid chart data.",
+    "no_data_for_chart": (
+        "I couldn't build that chart because the data it needed wasn't available."
+    ),
+    "turn_cut_short": "This turn needed more steps than allowed in one go.",
     "empty_answer": "I couldn't produce an answer from the data retrieved.",
     "empty_synthesis": "I couldn't produce an answer from the data retrieved.",
 }
 
 
+SYNTHESIS_PROMPT = (
+    "You are the final responder for a company intelligence assistant. "
+    "Combine the specialist results below into ONE clear, coherent answer to "
+    "the user. Preserve every concrete fact (numbers, names, sources). Do not "
+    "invent anything. If a result failed or is incomplete, briefly note the "
+    "limitation. Do not mention specialists, steps, or internal tooling."
+)
+
+
+class _ResultView(NamedTuple):
+    status: str
+    summary: str
+    issue: Optional[str]
+
+
 def _issue_code(issue: str | None) -> str:
     return (issue or "").split(":", 1)[0].strip()
+
+
+def _completed_results(state: SupervisorState) -> list[_ResultView]:
+    """Completed plan results, or the legacy single last_result when no plan is
+    present (keeps direct callers and older checkpoints working)."""
+    results = [
+        _ResultView(item.status, item.result_summary or "", item.issue)
+        for item in state.plan
+        if item.status in ("done", "failed", "skipped") and item.result_summary
+    ]
+    if not results and state.last_result is not None:
+        lr = state.last_result
+        results.append(_ResultView(lr.status, lr.summary, lr.issue))
+    return results
+
+
+def _render_single(result: _ResultView) -> str:
+    if result.status == "done":
+        return result.summary
+    return _user_facing_failure(result)
+
+
+def _synthesize_results(results: list[_ResultView]) -> str:
+    joined = "\n\n".join(
+        f"[{i + 1}] status={r.status}"
+        + (f" issue={_issue_code(r.issue)}" if r.issue else "")
+        + f"\n{r.summary}"
+        for i, r in enumerate(results)
+    )
+    try:
+        response = llm().invoke([
+            SystemMessage(content=SYNTHESIS_PROMPT),
+            HumanMessage(content=joined),
+        ])
+        text = str(response.content).strip()
+        if text:
+            return text
+    except Exception as e:
+        logger.warning(
+            "final_synthesis_failed",
+            extra={"error": f"{type(e).__name__}: {e}"},
+        )
+
+    # Deterministic fallback: stitch the summaries together.
+    return "\n\n".join(r.summary for r in results if (r.summary or "").strip())
 
 
 def _user_facing_failure(result) -> str:
@@ -115,18 +185,32 @@ def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
         update["clarification_count"] = 0
         return update
 
-    if state.last_result is not None:
-        result = state.last_result
-        if result.status == "done":
-            content = result.summary
-        else:
-            content = _user_facing_failure(result)
+    results = _completed_results(state)
 
-        if content and content.strip() and not _already_delivered(state.messages, content):
-            update["messages"] = [AIMessage(content=content)]
+    if len(results) == 1:
+        content = _render_single(results[0])
+    elif len(results) >= 2:
+        content = _synthesize_results(results)
+    else:
+        content = None
 
-        update["last_result"] = None
-        update["clarification_count"] = 0
+    extras = [
+        note
+        for note in (
+            state.plan_note,
+            TURN_CUT_SHORT_NOTE if state.turn_cut_short else None,
+        )
+        if note
+    ]
+    if extras:
+        prefix = f"{content}\n\n" if content and content.strip() else ""
+        content = prefix + "\n\n".join(extras)
+
+    if content and content.strip() and not _already_delivered(state.messages, content):
+        update["messages"] = [AIMessage(content=content)]
+
+    update["last_result"] = None
+    update["clarification_count"] = 0
 
     user_id = (config.get("configurable") or {}).get("user_id")
     latest_human = _latest_human_message(state.messages)

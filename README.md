@@ -68,42 +68,34 @@ Sensitive data such as salaries and credentials is protected by three layers, on
 | --- | --- | --- |
 | 1 | Tool binding by `permission_level` (`agents/sql_agent.py`) | A `general` user is never bound `get_salary` / `get_user_credential`, so the model cannot call them |
 | 2 | PostgreSQL role grants (`db/init/02_roles.sql`) | **The actual security boundary.** `general_role` has no grants on `salaries` or `credentials`, and cannot even see them in `information_schema` |
-| 3 | Sensitive-intent gate (`services/message_utils.py`) | UX fast-path only. A precision-first synonym/regex list gives a clear denial instead of a database error |
+| 3 | Sensitive-intent gate (`services/message_utils.py`) | UX fast-path only. A precision-first list of clear compensation/credential phrasings gives a clear denial instead of a database error; ambiguous terms (`earnings`, `bonus`, `credential`) are deliberately excluded to avoid false positives |
 
 The keyword gate is deliberately **not** a security control: a missed synonym cannot grant access, because layer 2 still denies the query. An LLM-based classifier is intentionally not used for authorization, consistent with the project lesson that authorization must not be enforced by model judgment.
 
-### Deterministic Guards
+### Planning and Deterministic Execution
 
-The system uses deterministic guards rather than relying entirely on the model:
+The supervisor's LLM decomposes the request into an ordered workflow **once per turn** (`WorkflowPlan`, e.g. `[sql, rag]` or `[sql, visu]`). Execution is then deterministic: each step runs, its result is written back into the plan, and the next pending step is forced. The final node combines every completed result into one answer.
 
-* Never loop on a failed specialist.
-* Stop after a defined number of research attempts.
-* Force `end` after a successful result.
-* Automatically route SQL → visualization in the same turn when `structured_data` exists and the user asked for a chart.
-
-These rules are enforced in `deterministic_decision`.
+* A single-intent request is a one-step plan.
+* A chart over database data is `[sql, visu]`; the `visu` step renders from the SQL step's `structured_data` and needs no LLM.
+* If a step fails, independent remaining steps still run. A later `visu` step that depends on database rows is marked `skipped` when those rows are unavailable, and the final answer says what was skipped.
+* If planning fails, a single-decision fallback is used; if no provider is usable, the turn ends with a static message.
 
 ### Routing State Machine
 
 The graph is `START → memory_manager → supervisor → {rag | convo | sql | visu | research | clarification} → supervisor → … → finalize → END`. Every specialist edge returns to `supervisor`; only `finalize` reaches `END`.
 
-Each time the supervisor runs it:
+Each turn:
 
-1. Records the previous specialist result as a `TaskRecord` on the current turn.
-2. Calls `deterministic_decision` (`agents/supervisor.py`), which resolves the turn without the LLM in this order:
-   - Per-turn hop limit (`MAX_HOPS_PER_TURN`) → `end`.
-   - A `done` result with `structured_data` and chart intent → `visu`.
-   - A `done` result → `end` (prevents loops).
-   - `rag_unavailable` → `convo` (honest outage message).
-   - `permission_denied` → `convo`, but only once per turn.
-   - `no_matching_documents` → `convo` (never invent an answer).
-   - A previously failed/partial result on the same route → `convo` explaining the limitation.
-   - Anything else → the LLM is consulted for a genuinely novel decision.
-3. Applies `post_decision_guards`: same-route cap per turn (`MAX_SAME_ROUTE_PER_TURN`), refusal to re-route to a specialist that already finished, and at most one clarification per turn (`MAX_CLARIFICATIONS_PER_TURN`).
-4. Applies `enforce_task_history_guard`: blocks the exact same completed task on the same route within the turn.
-5. Maps the decision into state via `map_to_state`, which clears `last_result` for every route except `end` and `visu` (those still need the structured data).
+1. `memory_manager` resets the plan (`plan_ready=False`) and the per-turn counters.
+2. On the first supervisor run, `get_workflow_plan` makes one LLM call and stores an ordered `plan: list[PlanItem]`.
+3. On every run, the supervisor writes the previous specialist result into the first pending plan item (status, summary, issue, `structured_data`), records a `TaskRecord`, and sets `next` to the next pending step — deterministically, with no further routing LLM calls.
+4. A completed SQL step with `structured_data` plus chart intent inserts a `visu` step; a `visu` step whose upstream SQL produced no rows is marked `skipped` instead of running.
+5. When no pending steps remain, `next=end`; `finalize` combines all completed plan results (one LLM synthesis call when there is more than one) and reports skipped steps.
 
-Clarification is an interrupt: `Clarification` pauses the graph, and `chat.py` / `main.py` resume it with `Command(resume=…)`. `memory_manager` runs once per user turn, not on resume.
+Clarification is an interrupt: the planner emits a single `clarification` step, `Clarification` pauses the graph, and on resume it clears `plan_ready` so the supervisor re-plans with the answer. `memory_manager` runs once per user turn, not on resume.
+
+Failures are handled by the plan, not by per-hop routing: a failed step is marked `failed`, independent remaining steps still run, and a dependent chart step is `skipped` when no upstream rows exist. `finalize` maps internal issue codes to user-safe text and reports skipped steps. A per-turn hop cap (`MAX_HOPS`, `MAX_PLAN_STEPS + MAX_CLARIFICATIONS_PER_TURN + 1`) ends any turn that exceeds the legitimate step budget, logging an error because reaching it means a plan invariant broke.
 
 The research subgraph (`agents/research/`) is its own controller loop. `Sub_controler` ends immediately if `report_written` is set, forces `report` after `MAX_RESEARCH_ATTEMPTS`, and forces `report` once a substantial research note exists — so it cannot loop on the report step.
 
@@ -359,11 +351,11 @@ run_rag_evaluation("rag-eval-v1")
 
 ### Routing Evaluation
 
-Routing evaluation uses `task_history` to determine which specialist ran.
+Routing evaluation reads the turn's `plan` (completed steps), falling back to `task_history`, to determine which specialists ran.
 
-Clarification is scored through the graph interrupt because it is not recorded in `task_history`.
+Clarification is scored through the graph interrupt.
 
-Chart requests may appear as SQL followed by visualization in the same turn.
+Chart requests appear as SQL followed by visualization in the same plan.
 
 ### RAG Evaluation
 

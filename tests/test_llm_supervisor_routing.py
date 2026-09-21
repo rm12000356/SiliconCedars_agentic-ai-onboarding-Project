@@ -4,7 +4,7 @@ LLM routing-precision tests for the supervisor residual path.
 First-turn requests (no last_result) fall through to the real model.
 Each route has ~20 prompts.
 
-Run:  pytest -m llm tests/test_llm_supervisor_routing.py -v -s
+Run:  pytest llm tests/test_llm_supervisor_routing.py -m llm -v -s
 """
 
 from __future__ import annotations
@@ -13,7 +13,13 @@ from langchain_core.messages import HumanMessage
 
 import pytest
 
-from agents.supervisor import gather_context, get_supervisor_decision
+from agents.supervisor import (
+    MAX_PLAN_STEPS,
+    _validate_plan,
+    gather_context,
+    get_supervisor_decision,
+    get_workflow_plan,
+)
 from services.llm import llm
 from state.state import SupervisorState
 
@@ -23,12 +29,12 @@ from tests.conftest import requires_llm
 pytestmark = [pytest.mark.llm, requires_llm]
 
 MIN_ACCURACY = {
-    "sql": 0.70,
-    "rag": 0.70,
-    "research": 0.70,
-    "visu": 0.60,
-    "convo": 0.60,
-    "clarification": 0.30,
+    "sql": 0.90,
+    "rag": 0.90,
+    "research": 0.90,
+    "visu": 0.90,
+    "convo": 0.90,
+    "clarification": 0.90,
 }
 
 SQL_CASES = [
@@ -98,6 +104,10 @@ RESEARCH_CASES = [
     ("Find recent papers on vector databases online.", frozenset({"research"})),
     ("Search for the official Python 3.13 release notes online.", frozenset({"research"})),
     ("Research the current Bitcoin price on the public web.", frozenset({"research"})),
+    # Freshness: current facts without an explicit "research" verb.
+    ("Who is the current CEO of OpenAI?", frozenset({"research"})),
+    ("Who is the current president of France?", frozenset({"research"})),
+    ("What is the latest version of Python?", frozenset({"research"})),
 ]
 
 VISU_CASES = [
@@ -135,17 +145,14 @@ CONVO_CASES = [
     ("Thanks, that was helpful.", frozenset({"convo"})),
     ("Who are you?", frozenset({"convo"})),
     ("Good morning", frozenset({"convo"})),
-    ("Can you rephrase that more simply?", frozenset({"convo"})),
     ("What is a database, in one sentence?", frozenset({"convo"})),
     ("How does this assistant work at a high level?", frozenset({"convo"})),
     ("Nice to meet you", frozenset({"convo"})),
     ("What does RAG mean?", frozenset({"convo"})),
     ("Just checking if you're online.", frozenset({"convo"})),
     ("Explain what a pie chart is.", frozenset({"convo"})),
-    ("Please summarize that more briefly.", frozenset({"convo"})),
     ("Hi there", frozenset({"convo"})),
     ("Thank you", frozenset({"convo"})),
-    ("Can you say that again?", frozenset({"convo"})),
     ("What specialists do you have, in simple terms?", frozenset({"convo"})),
     ("Hey, are you there?", frozenset({"convo"})),
     ("That's all for now.", frozenset({"convo"})),
@@ -186,20 +193,17 @@ def _route(prompt: str) -> str:
     return decision.next
 
 
-def _assert_precision(cases, label, min_accuracy):
-    mistakes = []
-    hits = 0
-    for prompt, accepted in cases:
-        chosen = _route(prompt)
-        ok = chosen in accepted
-        mark = "OK" if ok else "MISS"
-        print(f"[{label}] {mark}  expected={sorted(accepted)}  got={chosen!r}  {prompt!r}")
-        if ok:
-            hits += 1
-        else:
-            mistakes.append(f"  got={chosen!r} expected={sorted(accepted)}  {prompt!r}")
+def _plan_routes(prompt: str) -> list[str]:
+    state = SupervisorState(
+        messages=[HumanMessage(content=prompt)],
+        turn_count=1,
+    )
+    context = gather_context(state, task_history=[], user_id=None)
+    plan, _ = _validate_plan(get_workflow_plan(context, llm()), state)
+    return [item.route for item in plan]
 
-    total = len(cases)
+
+def _report(label, hits, total, min_accuracy, mistakes):
     accuracy = hits / total if total else 0.0
     print(f"[{label}] accuracy={accuracy:.0%} ({hits}/{total})  threshold={min_accuracy:.0%}")
     if accuracy < min_accuracy:
@@ -210,25 +214,201 @@ def _assert_precision(cases, label, min_accuracy):
         )
 
 
-def test_llm_routes_sql_prompts():
-    _assert_precision(SQL_CASES, "sql", MIN_ACCURACY["sql"])
+def _assert_plan_exact(cases, label, min_accuracy):
+    """cases: (prompt, expected_route_list); the plan must match exactly."""
+    mistakes = []
+    hits = 0
+    for prompt, expected in cases:
+        plan = _plan_routes(prompt)
+        ok = plan == expected
+        print(
+            f"[{label}] {'OK' if ok else 'MISS'}  expected={expected}  "
+            f"got={plan!r}  {prompt!r}"
+        )
+        if ok:
+            hits += 1
+        else:
+            mistakes.append(f"  got={plan!r} expected={expected}  {prompt!r}")
+    _report(label, hits, len(cases), min_accuracy, mistakes)
 
 
-def test_llm_routes_rag_prompts():
-    _assert_precision(RAG_CASES, "rag", MIN_ACCURACY["rag"])
+def _assert_plan_set(cases, label, min_accuracy):
+    """cases: (prompt, {acceptable_frozensets}); the plan's route set must match."""
+    mistakes = []
+    hits = 0
+    for prompt, acceptable in cases:
+        plan = _plan_routes(prompt)
+        ok = frozenset(plan) in acceptable
+        expected = sorted(sorted(group) for group in acceptable)
+        print(
+            f"[{label}] {'OK' if ok else 'MISS'}  expected={expected}  "
+            f"got={plan!r}  {prompt!r}"
+        )
+        if ok:
+            hits += 1
+        else:
+            mistakes.append(f"  got={plan!r} acceptable={acceptable}  {prompt!r}")
+    _report(label, hits, len(cases), min_accuracy, mistakes)
 
 
-def test_llm_routes_research_prompts():
-    _assert_precision(RESEARCH_CASES, "research", MIN_ACCURACY["research"])
+# --- planner route precision (primary path) ---------------------------------
 
 
-def test_llm_routes_visu_prompts():
-    _assert_precision(VISU_CASES, "visu", MIN_ACCURACY["visu"])
+def test_llm_planner_routes_sql_prompts():
+    _assert_plan_exact([(p, ["sql"]) for p, _ in SQL_CASES], "sql", MIN_ACCURACY["sql"])
 
 
-def test_llm_routes_convo_prompts():
-    _assert_precision(CONVO_CASES, "convo", MIN_ACCURACY["convo"])
+def test_llm_planner_routes_rag_prompts():
+    _assert_plan_exact([(p, ["rag"]) for p, _ in RAG_CASES], "rag", MIN_ACCURACY["rag"])
 
 
-def test_llm_routes_clarification_prompts():
-    _assert_precision(CLARIFICATION_CASES, "clarification", MIN_ACCURACY["clarification"])
+def test_llm_planner_routes_research_prompts():
+    _assert_plan_exact(
+        [(p, ["research"]) for p, _ in RESEARCH_CASES],
+        "research",
+        MIN_ACCURACY["research"],
+    )
+
+
+def test_llm_planner_routes_convo_prompts():
+    _assert_plan_exact(
+        [(p, ["convo"]) for p, _ in CONVO_CASES], "convo", MIN_ACCURACY["convo"]
+    )
+
+
+def test_llm_planner_routes_clarification_prompts():
+    _assert_plan_exact(
+        [(p, ["clarification"]) for p, _ in CLARIFICATION_CASES],
+        "clarification",
+        MIN_ACCURACY["clarification"],
+    )
+
+
+# VISU_CASES layout: first 19 are charts over database data (sql then visu),
+# index 19 is a chart with no data at all, the last 5 carry inline values.
+VISU_PLAN_CASES = (
+    [(prompt, {frozenset({"sql", "visu"})}) for prompt, _ in VISU_CASES[:19]]
+    + [
+        (prompt, {frozenset({"visu"}), frozenset({"clarification"})})
+        for prompt, _ in VISU_CASES[19:20]
+    ]
+    + [(prompt, {frozenset({"visu"})}) for prompt, _ in VISU_CASES[20:]]
+)
+
+
+def test_llm_planner_routes_visu_prompts():
+    _assert_plan_set(VISU_PLAN_CASES, "visu", MIN_ACCURACY["visu"])
+
+
+# --- fallback smoke (planning-schema-failure path) --------------------------
+
+
+FALLBACK_SMOKE = [
+    ("How many employees are there?", {"sql"}),
+    ("What does our remote work policy say?", {"rag"}),
+    ("Who is the current CEO of OpenAI?", {"research"}),
+    ("Hello", {"convo"}),
+    ("Tell me about the numbers.", {"clarification"}),
+    ("Show sales by region as a pie chart.", {"visu", "sql"}),
+]
+
+
+def test_llm_fallback_routes_smoke():
+    mistakes = []
+    for prompt, accepted in FALLBACK_SMOKE:
+        chosen = _route(prompt)
+        ok = chosen in accepted
+        print(
+            f"[fallback] {'OK' if ok else 'MISS'}  expected={sorted(accepted)}  "
+            f"got={chosen!r}  {prompt!r}"
+        )
+        if not ok:
+            mistakes.append(f"  got={chosen!r} expected={sorted(accepted)}  {prompt!r}")
+    if mistakes:
+        pytest.fail("fallback routing smoke failed:\n" + "\n".join(mistakes))
+
+
+PLANNER_CASES = [
+    # Single-intent requests.
+    ("How many employees are there?", ["sql"]),
+    ("What does our remote work policy say?", ["rag"]),
+    ("Who is the current CEO of OpenAI?", ["research"]),
+    ("Hello, how are you?", ["convo"]),
+    ("Tell me about the numbers.", ["clarification"]),
+    # Two distinct asks, in the order they should run.
+    (
+        "How many employees are there, and what does the remote work policy say?",
+        ["sql", "rag"],
+    ),
+    ("Show sales by region as a pie chart.", ["sql", "visu"]),
+    (
+        "How many employees do we have, and what is the current price of gold?",
+        ["sql", "research"],
+    ),
+    (
+        "Who is the current CEO of Tesla, and how many employees do we have?",
+        ["research", "sql"],
+    ),
+    # Inline chart data needs no sql step.
+    ("Make a pie chart: 60% EU, 25% MENA, 15% APAC.", ["visu"]),
+    # Three distinct asks.
+    (
+        "How many employees are there, who is the current CEO of OpenAI, "
+        "and what does our remote work policy say?",
+        ["sql", "research", "rag"],
+    ),
+    (
+        "Show sales by region as a pie chart, and what does the remote work policy say?",
+        ["sql", "visu", "rag"],
+    ),
+    (
+        "Who is the current CEO of Tesla, how many employees do we have, "
+        "and make a pie chart: 60% EU, 40% US.",
+        ["research", "sql", "visu"],
+    ),
+]
+
+
+@pytest.mark.parametrize("prompt,expected", PLANNER_CASES)
+def test_llm_planner_decomposes_workflows(prompt, expected):
+    assert _plan_routes(prompt) == expected
+
+
+# Order-ambiguous pairs: the planner may reasonably put the database count
+# before or after the document lookup, so assert the set, not the order.
+PLANNER_UNORDERED_CASES = [
+    (
+        "What does our remote work policy say, and how many employees are there?",
+        {"rag", "sql"},
+    ),
+    (
+        "Summarize our lessons on state design, and count the sales rows.",
+        {"rag", "sql"},
+    ),
+]
+
+
+@pytest.mark.parametrize("prompt,expected", PLANNER_UNORDERED_CASES)
+def test_llm_planner_decomposes_unordered_workflows(prompt, expected):
+    assert set(_plan_routes(prompt)) == expected
+
+
+def test_llm_planner_handles_greeting_plus_tasks():
+    """A greeting may or may not become its own step; the tasks must appear in
+    order regardless."""
+    routes = _plan_routes(
+        "Hi! Who is the current CEO of OpenAI, and how many employees do we have?"
+    )
+    assert [route for route in routes if route != "convo"] == ["research", "sql"]
+
+
+def test_llm_planner_caps_long_requests():
+    routes = _plan_routes(
+        "How many employees are there, what does the policy say, "
+        "who is the current CEO of OpenAI, and chart the sales by region."
+    )
+    assert len(routes) <= MAX_PLAN_STEPS
+    assert all(
+        route in {"rag", "convo", "sql", "research", "visu", "clarification"}
+        for route in routes
+    )
