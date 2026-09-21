@@ -9,7 +9,7 @@ from agents.supervisor import supervisor_agent
 from agents.sql_agent import Sql_agent
 from services.budget import TurnBudget, TurnBudgetExceeded, budget_scope, get_budget
 from services.llm import ResilientLLM
-from state.state import PlanItem, SupervisorState
+from state.state import PlanItem, SpecialistResult, SupervisorState
 from tests.conftest import make_config, make_sql_state
 
 
@@ -123,6 +123,12 @@ def test_chart_route_survives_exhausted_budget():
         messages=[HumanMessage(content="chart that")],
         turn_count=1,
         plan_ready=True,
+        last_result=SpecialistResult(
+            source="sql",
+            summary="Sales by region",
+            status="done",
+            structured_data=[{"label": "MENA", "value": 1200.5}],
+        ),
         plan=[
             PlanItem(
                 route="sql",

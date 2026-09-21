@@ -94,7 +94,7 @@ Decompose the latest user request into an ordered workflow of specialist steps. 
 - sql: live structured data from the operational database — counts, sums, lists, a named person's department/salary, a sale row, a credential row.
 - rag: internal company documents, policies, procedures, lessons-learned.
 - research: external/public information, including current or time-sensitive facts.
-- visu: build a chart. Include it after a sql step when the user asks for a chart/graph/plot over database data, or as the ONLY step when the user provides the chart values inline.
+- visu: build a chart. Include it after a sql step when the user asks for a chart/graph/plot over database data, or as the ONLY step when the user provides the chart values inline. Every visu step MUST set data_source: "database" when it charts structured_data from an earlier sql step, or "inline" when the user's message supplies the values. For "inline", restate the exact labels and values in the task.
 - convo: answer directly (greetings, definitions, small talk, light synthesis).
 - clarification: the request is genuinely unclear. Use this as the ONLY step.
 
@@ -223,6 +223,7 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
         plan = _apply_clarification_cap(plan, state)
 
     plan = _maybe_insert_visu(plan, state)
+    plan = _skip_unbudgeted_visu(plan, state)
 
     decision = _end_decision() if outage else _next_plan_decision(plan)
 
@@ -239,6 +240,17 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
     update["task_history"] = task_history
     update["plan"] = plan
     update["plan_ready"] = True
+
+    next_item = _next_pending(plan)
+    if (
+        decision.next == "visu"
+        and next_item is not None
+        and next_item.route == "visu"
+        and next_item.data_source == "inline"
+    ):
+        # Inline charts must extract their values from the current task; do not
+        # let a stale structured_data result override the user's own numbers.
+        update["last_result"] = None
 
     if decision.next == "clarification":
         update["clarification_question"] = _generate_clarification_question(decision)
@@ -304,11 +316,31 @@ def _plan_from_workflow(workflow: WorkflowPlan) -> list[PlanItem]:
             )
         ]
 
-    return [
-        PlanItem(route=step.route, task=step.task)
-        for step in steps
-        if step.task and step.task.strip()
-    ]
+    plan: list[PlanItem] = []
+    for index, step in enumerate(steps):
+        if not step.task or not step.task.strip():
+            continue
+
+        data_source = step.data_source
+        if step.route == "visu" and data_source is None:
+            # Deterministic fallback when the planner omits the field: a visu
+            # that follows a sql step charts that data; a standalone visu
+            # charts inline values from the user message.
+            data_source = (
+                "database"
+                if any(s.route == "sql" for s in steps[:index])
+                else "inline"
+            )
+
+        plan.append(
+            PlanItem(
+                route=step.route,
+                task=step.task,
+                data_source=data_source,
+            )
+        )
+
+    return plan
 
 
 def get_workflow_plan(context: dict, model, max_attempts: int = 2) -> list[PlanItem]:
@@ -389,18 +421,28 @@ def _apply_clarification_cap(
 def _maybe_insert_visu(
     plan: list[PlanItem], state: SupervisorState
 ) -> list[PlanItem]:
-    if any(item.route == "visu" and item.status == "pending" for item in plan):
+    """Add a visu step at most once per turn, and only when the previous
+    result already carries structured_data (so it renders deterministically).
+
+    Re-inserting after a visu has already run would route back to a visu with
+    no structured_data, which falls back to an LLM call and can loop until the
+    turn budget is spent.
+    """
+    if any(item.route == "visu" for item in plan):
         return plan
     if not _user_wants_visualization(state):
         return plan
-    has_rows = any(
-        item.route == "sql" and item.status == "done" and item.structured_data
-        for item in plan
-    )
-    if has_rows:
+
+    last = state.last_result
+    if (
+        last is not None
+        and last.status == "done"
+        and last.structured_data
+    ):
         plan.append(
             PlanItem(
                 route="visu",
+                data_source="database",
                 task=(
                     "Create a clear chart from the structured_data of the "
                     "previous result."
@@ -410,11 +452,48 @@ def _maybe_insert_visu(
     return plan
 
 
-def _next_plan_decision(plan: list[PlanItem]) -> SupervisorDecision:
+def _skip_unbudgeted_visu(
+    plan: list[PlanItem], state: SupervisorState
+) -> list[PlanItem]:
+    """Backstop: once the turn budget is spent, do not route to a visu that
+    would need an LLM call. A visu that charts existing structured_data is
+    deterministic and remains allowed; an inline visu (or one with no rows)
+    is not."""
+    budget = get_budget()
+    if budget is None or not budget.exhausted():
+        return plan
+
+    last_has_rows = (
+        state.last_result is not None and state.last_result.structured_data
+    )
+
+    for item in plan:
+        if item.route != "visu" or item.status != "pending":
+            continue
+
+        deterministic = item.data_source != "inline" and last_has_rows
+        if not deterministic:
+            item.status = "failed"
+            item.issue = "budget_exceeded"
+            item.result_summary = (
+                "This request could not be completed within the allowed "
+                "budget for a single turn."
+            )
+    return plan
+
+
+def _next_pending(plan: list[PlanItem]) -> PlanItem | None:
     for item in plan:
         if item.status == "pending":
-            return SupervisorDecision(next=item.route, current_task=item.task)
-    return _end_decision()
+            return item
+    return None
+
+
+def _next_plan_decision(plan: list[PlanItem]) -> SupervisorDecision:
+    item = _next_pending(plan)
+    if item is None:
+        return _end_decision()
+    return SupervisorDecision(next=item.route, current_task=item.task)
 
 
 _CHART_TYPE = r"(?:bar|pie|line|scatter|histogram|donut|doughnut)"

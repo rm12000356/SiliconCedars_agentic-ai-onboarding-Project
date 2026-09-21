@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 from state.state import MainRoute, PlanRoute
 
@@ -8,6 +10,13 @@ class PlanStep(BaseModel):
     )
     task: str = Field(
         description="Concise, self-contained task for that specialist."
+    )
+    data_source: Literal["database", "inline"] | None = Field(
+        default=None,
+        description="For visu steps only: 'database' when the chart uses "
+                    "structured_data produced by an earlier sql step; 'inline' "
+                    "when the user's message itself supplies the chart values. "
+                    "Null for all other routes.",
     )
 
 

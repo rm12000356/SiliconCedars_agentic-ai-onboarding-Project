@@ -114,6 +114,12 @@ class PlanItem(BaseModel):
         default=None,
         description="Chartable label/value rows, when the step produced them.",
     )
+    data_source: Optional[Literal["database", "inline"]] = Field(
+        default=None,
+        description="For visu steps: 'database' charts structured_data from an "
+                    "earlier sql step; 'inline' charts values supplied by the "
+                    "user. None for non-visu steps.",
+    )
 
 
 class SupervisorState(BaseModel):

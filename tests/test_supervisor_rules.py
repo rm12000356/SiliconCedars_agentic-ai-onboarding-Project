@@ -15,10 +15,12 @@ from agents.supervisor import (
     _apply_clarification_cap,
     _maybe_insert_visu,
     _plan_from_workflow,
+    _skip_unbudgeted_visu,
     _user_wants_visualization,
 )
 from state.state import PlanItem, SpecialistResult, SupervisorState
 from state.structure_output import PlanStep, WorkflowPlan
+from services.budget import TurnBudget, budget_scope
 from services.errors import LLMOutageError
 from services.message_utils import CLARIFICATION_ANSWER_FLAG
 
@@ -198,8 +200,46 @@ def test_plan_from_workflow_caps_steps():
     assert len(_plan_from_workflow(workflow)) == MAX_PLAN_STEPS
 
 
+def test_plan_from_workflow_carries_visu_data_source():
+    workflow = WorkflowPlan(
+        steps=[
+            PlanStep(route="sql", task="sales"),
+            PlanStep(
+                route="visu",
+                task="pie chart: 60 EU, 25 MENA, 15 APAC",
+                data_source="inline",
+            ),
+        ]
+    )
+
+    plan = _plan_from_workflow(workflow)
+
+    assert plan[1].data_source == "inline"
+
+
+def test_plan_from_workflow_infers_visu_data_source():
+    after_sql = _plan_from_workflow(
+        WorkflowPlan(
+            steps=[
+                PlanStep(route="sql", task="sales"),
+                PlanStep(route="visu", task="chart sales"),
+            ]
+        )
+    )
+    standalone = _plan_from_workflow(
+        WorkflowPlan(steps=[PlanStep(route="visu", task="chart 1, 2, 3")])
+    )
+
+    assert after_sql[1].data_source == "database"
+    assert standalone[0].data_source == "inline"
+
+
 def test_maybe_insert_visu_adds_step_after_sql_rows():
-    state = _state(text="Make a bar chart of that", turn_count=1)
+    state = _state(
+        text="Make a bar chart of that",
+        last_result=_done_sql_with_rows(),
+        turn_count=1,
+    )
     plan = [
         PlanItem(
             route="sql",
@@ -212,6 +252,88 @@ def test_maybe_insert_visu_adds_step_after_sql_rows():
     updated = _maybe_insert_visu(plan, state)
 
     assert [item.route for item in updated] == ["sql", "visu"]
+    assert updated[-1].data_source == "database"
+
+
+def test_maybe_insert_visu_not_reinserted_after_done_visu():
+    state = _state(
+        text="Make a bar chart of that",
+        last_result=SpecialistResult(
+            source="visu", summary="Here's the chart.", status="done"
+        ),
+        turn_count=1,
+    )
+    plan = [
+        PlanItem(
+            route="sql",
+            task="sales",
+            status="done",
+            structured_data=[{"label": "a", "value": 1}],
+        ),
+        PlanItem(route="visu", task="chart", status="done"),
+    ]
+
+    updated = _maybe_insert_visu(plan, state)
+
+    assert [item.route for item in updated] == ["sql", "visu"]
+
+
+def test_maybe_insert_visu_no_insert_without_structured_data():
+    state = _state(
+        text="Make a bar chart of that",
+        last_result=SpecialistResult(source="sql", summary="no rows", status="done"),
+        turn_count=1,
+    )
+    plan = [PlanItem(route="sql", task="sales", status="done")]
+
+    updated = _maybe_insert_visu(plan, state)
+
+    assert [item.route for item in updated] == ["sql"]
+
+
+def test_skip_unbudgeted_visu_blocks_llm_dependent_visu():
+    state = _state(
+        text="Make a bar chart of that",
+        last_result=SpecialistResult(source="sql", summary="no rows", status="done"),
+        turn_count=1,
+    )
+    plan = [PlanItem(route="visu", task="inline chart")]
+
+    with budget_scope(TurnBudget(max_calls=0, max_tokens=0, max_seconds=0.0)):
+        updated = _skip_unbudgeted_visu(plan, state)
+
+    assert updated[0].status == "failed"
+    assert updated[0].issue == "budget_exceeded"
+    assert updated[0].result_summary
+
+
+def test_skip_unbudgeted_visu_blocks_inline_visu_even_with_rows():
+    state = _state(
+        text="Make a bar chart of that",
+        last_result=_done_sql_with_rows(),
+        turn_count=1,
+    )
+    plan = [PlanItem(route="visu", task="inline chart", data_source="inline")]
+
+    with budget_scope(TurnBudget(max_calls=0, max_tokens=0, max_seconds=0.0)):
+        updated = _skip_unbudgeted_visu(plan, state)
+
+    assert updated[0].status == "failed"
+    assert updated[0].issue == "budget_exceeded"
+
+
+def test_skip_unbudgeted_visu_allows_deterministic_visu():
+    state = _state(
+        text="Make a bar chart of that",
+        last_result=_done_sql_with_rows(),
+        turn_count=1,
+    )
+    plan = [PlanItem(route="visu", task="chart")]
+
+    with budget_scope(TurnBudget(max_calls=0, max_tokens=0, max_seconds=0.0)):
+        updated = _skip_unbudgeted_visu(plan, state)
+
+    assert updated[0].status == "pending"
 
 
 def test_clarification_cap_converts_to_convo():
@@ -356,5 +478,116 @@ def test_supervisor_agent_auto_visu_skips_llm(monkeypatch):
     state.plan = [PlanItem(route="sql", task="sales by region", status="pending")]
 
     update = supervisor_agent(state, {"configurable": {}})
+    assert update["next"] == "visu"
+    assert "last_result" not in update
+
+
+def test_supervisor_does_not_loop_back_to_visu_after_done(monkeypatch):
+    """Once a visu step has run, the supervisor must terminate instead of
+    appending another visu (which would fall back to an LLM call and loop)."""
+    def boom(*_a, **_k):
+        raise AssertionError("LLM must not be called after a completed visu")
+
+    monkeypatch.setattr("agents.supervisor.llm", boom)
+
+    state = _state(
+        text="Make a bar chart of that",
+        last_result=SpecialistResult(
+            source="visu", summary="Here's the chart.", status="done"
+        ),
+        current_task="Create a clear chart from the structured_data.",
+        turn_count=1,
+    )
+    state.plan_ready = True
+    state.plan = [
+        PlanItem(
+            route="sql",
+            task="sales",
+            status="done",
+            structured_data=[{"label": "a", "value": 1}],
+        ),
+        PlanItem(route="visu", task="chart", status="pending"),
+    ]
+
+    update = supervisor_agent(state, {"configurable": {}})
+
+    assert update["next"] == "end"
+    assert [item.route for item in update["plan"]] == ["sql", "visu"]
+
+
+def test_supervisor_skips_llm_visu_when_budget_exhausted(monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("LLM must not be called when budget is exhausted")
+
+    monkeypatch.setattr("agents.supervisor.llm", boom)
+
+    state = _state(
+        text="Make a bar chart of that",
+        last_result=SpecialistResult(source="sql", summary="no rows", status="failed"),
+        current_task="sales by region",
+        turn_count=1,
+    )
+    state.plan_ready = True
+    state.plan = [
+        PlanItem(route="sql", task="sales by region", status="pending"),
+        PlanItem(route="visu", task="chart"),
+    ]
+
+    with budget_scope(TurnBudget(max_calls=0, max_tokens=0, max_seconds=0.0)):
+        update = supervisor_agent(state, {"configurable": {}})
+
+    assert update["next"] == "end"
+    assert update["plan"][1].status == "failed"
+    assert update["plan"][1].issue == "budget_exceeded"
+
+
+def test_supervisor_clears_last_result_for_inline_visu(monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("no LLM call expected while routing to visu")
+
+    monkeypatch.setattr("agents.supervisor.llm", boom)
+
+    state = _state(
+        text="Count employees and make a pie chart: 60 EU, 40 US",
+        last_result=_done_sql_with_rows(),
+        current_task="count employees",
+        turn_count=1,
+    )
+    state.plan_ready = True
+    state.plan = [
+        PlanItem(route="sql", task="count employees", status="pending"),
+        PlanItem(
+            route="visu",
+            task="pie chart: 60 EU, 40 US",
+            data_source="inline",
+        ),
+    ]
+
+    update = supervisor_agent(state, {"configurable": {}})
+
+    assert update["next"] == "visu"
+    assert update["last_result"] is None
+
+
+def test_supervisor_preserves_last_result_for_database_visu(monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("no LLM call expected while routing to visu")
+
+    monkeypatch.setattr("agents.supervisor.llm", boom)
+
+    state = _state(
+        text="Make a bar chart of that",
+        last_result=_done_sql_with_rows(),
+        current_task="count employees",
+        turn_count=1,
+    )
+    state.plan_ready = True
+    state.plan = [
+        PlanItem(route="sql", task="count employees", status="pending"),
+        PlanItem(route="visu", task="chart", data_source="database"),
+    ]
+
+    update = supervisor_agent(state, {"configurable": {}})
+
     assert update["next"] == "visu"
     assert "last_result" not in update

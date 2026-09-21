@@ -28,12 +28,12 @@ from tests.conftest import requires_llm
 pytestmark = [pytest.mark.llm, requires_llm]
 
 MIN_ACCURACY = {
-    "sql": 0.70,
-    "rag": 0.70,
-    "research": 0.70,
-    "visu": 0.60,
-    "convo": 0.60,
-    "clarification": 0.30,
+    "sql": 0.90,
+    "rag": 0.90,
+    "research": 0.90,
+    "visu": 0.90,
+    "convo": 0.90,
+    "clarification": 0.90,
 }
 
 SQL_CASES = [
