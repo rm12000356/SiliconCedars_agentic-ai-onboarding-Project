@@ -4,7 +4,7 @@ LLM routing-precision tests for the supervisor residual path.
 First-turn requests (no last_result) fall through to the real model.
 Each route has ~20 prompts.
 
-Run:  pytest -m llm tests/test_llm_supervisor_routing.py -v -s
+Run:  pytest llm tests/test_llm_supervisor_routing.py -m llm -v -s
 """
 
 from __future__ import annotations
@@ -195,20 +195,16 @@ def _route(prompt: str) -> str:
     return decision.next
 
 
-def _assert_precision(cases, label, min_accuracy):
-    mistakes = []
-    hits = 0
-    for prompt, accepted in cases:
-        chosen = _route(prompt)
-        ok = chosen in accepted
-        mark = "OK" if ok else "MISS"
-        print(f"[{label}] {mark}  expected={sorted(accepted)}  got={chosen!r}  {prompt!r}")
-        if ok:
-            hits += 1
-        else:
-            mistakes.append(f"  got={chosen!r} expected={sorted(accepted)}  {prompt!r}")
+def _plan_routes(prompt: str) -> list[str]:
+    state = SupervisorState(
+        messages=[HumanMessage(content=prompt)],
+        turn_count=1,
+    )
+    context = gather_context(state, task_history=[], user_id=None)
+    return [item.route for item in get_workflow_plan(context, llm())]
 
-    total = len(cases)
+
+def _report(label, hits, total, min_accuracy, mistakes):
     accuracy = hits / total if total else 0.0
     print(f"[{label}] accuracy={accuracy:.0%} ({hits}/{total})  threshold={min_accuracy:.0%}")
     if accuracy < min_accuracy:
@@ -219,37 +215,118 @@ def _assert_precision(cases, label, min_accuracy):
         )
 
 
-def test_llm_routes_sql_prompts():
-    _assert_precision(SQL_CASES, "sql", MIN_ACCURACY["sql"])
+def _assert_plan_exact(cases, label, min_accuracy):
+    """cases: (prompt, expected_route_list); the plan must match exactly."""
+    mistakes = []
+    hits = 0
+    for prompt, expected in cases:
+        plan = _plan_routes(prompt)
+        ok = plan == expected
+        print(
+            f"[{label}] {'OK' if ok else 'MISS'}  expected={expected}  "
+            f"got={plan!r}  {prompt!r}"
+        )
+        if ok:
+            hits += 1
+        else:
+            mistakes.append(f"  got={plan!r} expected={expected}  {prompt!r}")
+    _report(label, hits, len(cases), min_accuracy, mistakes)
 
 
-def test_llm_routes_rag_prompts():
-    _assert_precision(RAG_CASES, "rag", MIN_ACCURACY["rag"])
+def _assert_plan_set(cases, label, min_accuracy):
+    """cases: (prompt, {acceptable_frozensets}); the plan's route set must match."""
+    mistakes = []
+    hits = 0
+    for prompt, acceptable in cases:
+        plan = _plan_routes(prompt)
+        ok = frozenset(plan) in acceptable
+        expected = sorted(sorted(group) for group in acceptable)
+        print(
+            f"[{label}] {'OK' if ok else 'MISS'}  expected={expected}  "
+            f"got={plan!r}  {prompt!r}"
+        )
+        if ok:
+            hits += 1
+        else:
+            mistakes.append(f"  got={plan!r} acceptable={acceptable}  {prompt!r}")
+    _report(label, hits, len(cases), min_accuracy, mistakes)
 
 
-def test_llm_routes_research_prompts():
-    _assert_precision(RESEARCH_CASES, "research", MIN_ACCURACY["research"])
+# --- planner route precision (primary path) ---------------------------------
 
 
-def test_llm_routes_visu_prompts():
-    _assert_precision(VISU_CASES, "visu", MIN_ACCURACY["visu"])
+def test_llm_planner_routes_sql_prompts():
+    _assert_plan_exact([(p, ["sql"]) for p, _ in SQL_CASES], "sql", MIN_ACCURACY["sql"])
 
 
-def test_llm_routes_convo_prompts():
-    _assert_precision(CONVO_CASES, "convo", MIN_ACCURACY["convo"])
+def test_llm_planner_routes_rag_prompts():
+    _assert_plan_exact([(p, ["rag"]) for p, _ in RAG_CASES], "rag", MIN_ACCURACY["rag"])
 
 
-def test_llm_routes_clarification_prompts():
-    _assert_precision(CLARIFICATION_CASES, "clarification", MIN_ACCURACY["clarification"])
-
-
-def _plan_routes(prompt: str) -> list[str]:
-    state = SupervisorState(
-        messages=[HumanMessage(content=prompt)],
-        turn_count=1,
+def test_llm_planner_routes_research_prompts():
+    _assert_plan_exact(
+        [(p, ["research"]) for p, _ in RESEARCH_CASES],
+        "research",
+        MIN_ACCURACY["research"],
     )
-    context = gather_context(state, task_history=[], user_id=None)
-    return [item.route for item in get_workflow_plan(context, llm())]
+
+
+def test_llm_planner_routes_convo_prompts():
+    _assert_plan_exact(
+        [(p, ["convo"]) for p, _ in CONVO_CASES], "convo", MIN_ACCURACY["convo"]
+    )
+
+
+def test_llm_planner_routes_clarification_prompts():
+    _assert_plan_exact(
+        [(p, ["clarification"]) for p, _ in CLARIFICATION_CASES],
+        "clarification",
+        MIN_ACCURACY["clarification"],
+    )
+
+
+# VISU_CASES layout: first 19 are charts over database data (sql then visu),
+# index 19 is a chart with no data at all, the last 5 carry inline values.
+VISU_PLAN_CASES = (
+    [(prompt, {frozenset({"sql", "visu"})}) for prompt, _ in VISU_CASES[:19]]
+    + [
+        (prompt, {frozenset({"visu"}), frozenset({"clarification"})})
+        for prompt, _ in VISU_CASES[19:20]
+    ]
+    + [(prompt, {frozenset({"visu"})}) for prompt, _ in VISU_CASES[20:]]
+)
+
+
+def test_llm_planner_routes_visu_prompts():
+    _assert_plan_set(VISU_PLAN_CASES, "visu", MIN_ACCURACY["visu"])
+
+
+# --- fallback smoke (planning-schema-failure path) --------------------------
+
+
+FALLBACK_SMOKE = [
+    ("How many employees are there?", {"sql"}),
+    ("What does our remote work policy say?", {"rag"}),
+    ("Who is the current CEO of OpenAI?", {"research"}),
+    ("Hello", {"convo"}),
+    ("Tell me about the numbers.", {"clarification"}),
+    ("Show sales by region as a pie chart.", {"visu", "sql"}),
+]
+
+
+def test_llm_fallback_routes_smoke():
+    mistakes = []
+    for prompt, accepted in FALLBACK_SMOKE:
+        chosen = _route(prompt)
+        ok = chosen in accepted
+        print(
+            f"[fallback] {'OK' if ok else 'MISS'}  expected={sorted(accepted)}  "
+            f"got={chosen!r}  {prompt!r}"
+        )
+        if not ok:
+            mistakes.append(f"  got={chosen!r} expected={sorted(accepted)}  {prompt!r}")
+    if mistakes:
+        pytest.fail("fallback routing smoke failed:\n" + "\n".join(mistakes))
 
 
 PLANNER_CASES = [

@@ -41,13 +41,14 @@ Decide the single best next route for the latest user request.
 - rag: Internal company documents, policies, procedures, lessons-learned, and organizational knowledge. Choose this when the answer lives in a document: what a policy says, what a procedure is, or what was learned from a past project. Do NOT use it for concrete records in the operational database.
 - research: External/public information, including current or time-sensitive facts (today's weather, the latest price, who currently holds a position, recent news). Use it whenever the answer is not company-internal and may have changed since training, even if the user did not say "research". Never use it for company-internal topics.
 - sql: Live structured data from the operational database — counts, sums, lists, filters, rankings, and lookups of specific records such as one person's department, salary, or employee ID, a sale's amount/date, or a credential row. Choose sql whenever the answer is a field value in a table, even when the question names a person and is phrased like "What is <name>'s <field>?" or "Find the <id> for <name>".
-- visu: Only when structured_data already exists from a previous result and the user wants a chart/graph/plot.
+- visu: Build a chart. Choose it when structured_data already exists from a previous result, or when the user provides the chart values inline; the user wants a chart/graph/plot.
 - convo: You can answer directly (greetings, goodbyes, definitions, small talk, clarifying your own previous answer, or light synthesis).
 - clarification: The request itself is genuinely unclear — you do not understand what the user wants. Do NOT use this just because the request might need multiple steps.
 - end: Nothing further needs to happen.
 
 ### Decision rules
-- Chart requests without existing structured_data → sql (this is normal, not ambiguity).
+- Chart requests over database data without existing structured_data → sql (this is normal, not ambiguity).
+- Chart requests whose values are given inline (e.g. "pie chart: 60% EU, 25% MENA, 15% APAC") → visu; no sql is needed.
 - Prefer rag over research for anything internal.
 - Prefer convo over clarification whenever the request is understandable.
 - Goodbyes, thanks, and small talk → convo.
@@ -65,6 +66,7 @@ Decide by where the answer comes from:
 
 ### Examples
 - "How many employees are there?" → sql
+- "Make a pie chart: 60% EU, 25% MENA, 15% APAC." → visu
 - "What is Alice Example's department?" → sql
 - "Find the employee ID for Rami Noueihed." → sql
 - "What is Rami Noueihed's salary?" → sql
