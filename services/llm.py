@@ -22,7 +22,7 @@ PRIMARY_MODEL = "openai/gpt-oss-120b"
 # model, so it must not be in the fallback chain.
 FALLBACK_MODELS = [
     "openai/gpt-oss-20b",
-    "qwen/qwen3-32b",
+    "qwen/qwen3.8-27b",
 ]
 
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504, 529}
