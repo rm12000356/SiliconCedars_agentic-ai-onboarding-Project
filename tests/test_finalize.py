@@ -5,6 +5,7 @@ from agents.finalize import (
     Finalize,
     NO_ANSWER_FALLBACK,
     OUTAGE_MESSAGE,
+    TURN_CUT_SHORT_NOTE,
     _might_contain_memorable_info,
 )
 from state.state import PlanItem, SpecialistResult, SupervisorState
@@ -166,6 +167,66 @@ def test_known_issue_uses_user_facing_message():
     update = Finalize(state, _config())
 
     assert "permission" in update["messages"][0].content.lower()
+
+
+def test_skipped_step_uses_user_facing_message():
+    state = SupervisorState(
+        messages=[HumanMessage(content="chart sales")],
+        plan=[
+            PlanItem(
+                route="visu",
+                task="chart",
+                status="skipped",
+                issue="no_data_for_chart",
+                result_summary="The chart was skipped because the data was unavailable.",
+            )
+        ],
+        turn_count=1,
+    )
+
+    update = Finalize(state, _config())
+    content = update["messages"][0].content
+
+    assert "chart" in content.lower()
+    assert "data it needed" in content.lower()
+
+
+def test_plan_note_is_appended():
+    state = SupervisorState(
+        messages=[HumanMessage(content="do many things")],
+        plan=[
+            PlanItem(
+                route="sql", task="count", status="done", result_summary="2 employees"
+            )
+        ],
+        turn_count=1,
+        plan_note="I focused on the first 3 of 5 requested steps. Not covered: x.",
+    )
+
+    update = Finalize(state, _config())
+    content = update["messages"][0].content
+
+    assert "2 employees" in content
+    assert "Not covered" in content
+
+
+def test_turn_cut_short_note_is_appended_once():
+    state = SupervisorState(
+        messages=[HumanMessage(content="do many things")],
+        plan=[
+            PlanItem(
+                route="sql", task="count", status="done", result_summary="2 employees"
+            )
+        ],
+        turn_count=1,
+        turn_cut_short=True,
+    )
+
+    update = Finalize(state, _config())
+    content = update["messages"][0].content
+
+    assert "2 employees" in content
+    assert content.count(TURN_CUT_SHORT_NOTE) == 1
 
 
 def test_bare_im_does_not_trigger_memory_extraction():

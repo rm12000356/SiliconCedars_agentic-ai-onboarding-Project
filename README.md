@@ -78,7 +78,7 @@ The supervisor's LLM decomposes the request into an ordered workflow **once per 
 
 * A single-intent request is a one-step plan.
 * A chart over database data is `[sql, visu]`; the `visu` step renders from the SQL step's `structured_data` and needs no LLM.
-* If a step fails, execution continues with the remaining steps and the final answer notes the limitation.
+* If a step fails, independent remaining steps still run. A later `visu` step that depends on database rows is marked `skipped` when those rows are unavailable, and the final answer says what was skipped.
 * If planning fails, a single-decision fallback is used; if no provider is usable, the turn ends with a static message.
 
 ### Routing State Machine
@@ -90,12 +90,12 @@ Each turn:
 1. `memory_manager` resets the plan (`plan_ready=False`) and the per-turn counters.
 2. On the first supervisor run, `get_workflow_plan` makes one LLM call and stores an ordered `plan: list[PlanItem]`.
 3. On every run, the supervisor writes the previous specialist result into the first pending plan item (status, summary, issue, `structured_data`), records a `TaskRecord`, and sets `next` to the next pending step — deterministically, with no further routing LLM calls.
-4. A completed SQL step with `structured_data` plus chart intent inserts a `visu` step.
-5. When no pending steps remain, `next=end`; `finalize` combines all completed plan results (one LLM synthesis call when there is more than one).
+4. A completed SQL step with `structured_data` plus chart intent inserts a `visu` step; a `visu` step whose upstream SQL produced no rows is marked `skipped` instead of running.
+5. When no pending steps remain, `next=end`; `finalize` combines all completed plan results (one LLM synthesis call when there is more than one) and reports skipped steps.
 
 Clarification is an interrupt: the planner emits a single `clarification` step, `Clarification` pauses the graph, and on resume it clears `plan_ready` so the supervisor re-plans with the answer. `memory_manager` runs once per user turn, not on resume.
 
-Failures are handled by the plan, not by per-hop routing: a failed step is marked `failed`, remaining steps still run, and `finalize` maps internal issue codes to user-safe text. The per-turn clarification cap (`MAX_CLARIFICATIONS_PER_TURN`) is the remaining backstop.
+Failures are handled by the plan, not by per-hop routing: a failed step is marked `failed`, independent remaining steps still run, and a dependent chart step is `skipped` when no upstream rows exist. `finalize` maps internal issue codes to user-safe text and reports skipped steps. A per-turn hop cap (`MAX_HOPS`, `MAX_PLAN_STEPS + MAX_CLARIFICATIONS_PER_TURN + 1`) ends any turn that exceeds the legitimate step budget, logging an error because reaching it means a plan invariant broke.
 
 The research subgraph (`agents/research/`) is its own controller loop. `Sub_controler` ends immediately if `report_written` is set, forces `report` after `MAX_RESEARCH_ATTEMPTS`, and forces `report` once a substantial research note exists — so it cannot loop on the report step.
 

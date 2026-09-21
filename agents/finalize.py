@@ -29,6 +29,11 @@ OUTAGE_MESSAGE = (
     "Please try again in a moment."
 )
 
+TURN_CUT_SHORT_NOTE = (
+    "This turn was cut short because it needed more steps than the "
+    "assistant allows in one go. Please narrow the request."
+)
+
 # User-facing text for known internal failure codes. Raw issue strings can
 # contain database/provider errors and must never be shown to the user.
 _GENERIC_FAILURE = "I wasn't able to complete that request."
@@ -51,6 +56,10 @@ _ISSUE_MESSAGES = {
     "research_empty_report": "The research step didn't produce a usable report.",
     "visualization_failed": "I couldn't generate that chart.",
     "invalid_chart_spec": "That request didn't contain valid chart data.",
+    "no_data_for_chart": (
+        "I couldn't build that chart because the data it needed wasn't available."
+    ),
+    "turn_cut_short": "This turn needed more steps than allowed in one go.",
     "empty_answer": "I couldn't produce an answer from the data retrieved.",
     "empty_synthesis": "I couldn't produce an answer from the data retrieved.",
 }
@@ -81,7 +90,7 @@ def _completed_results(state: SupervisorState) -> list[_ResultView]:
     results = [
         _ResultView(item.status, item.result_summary or "", item.issue)
         for item in state.plan
-        if item.status in ("done", "failed") and item.result_summary
+        if item.status in ("done", "failed", "skipped") and item.result_summary
     ]
     if not results and state.last_result is not None:
         lr = state.last_result
@@ -184,6 +193,18 @@ def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
         content = _synthesize_results(results)
     else:
         content = None
+
+    extras = [
+        note
+        for note in (
+            state.plan_note,
+            TURN_CUT_SHORT_NOTE if state.turn_cut_short else None,
+        )
+        if note
+    ]
+    if extras:
+        prefix = f"{content}\n\n" if content and content.strip() else ""
+        content = prefix + "\n\n".join(extras)
 
     if content and content.strip() and not _already_delivered(state.messages, content):
         update["messages"] = [AIMessage(content=content)]

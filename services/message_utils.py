@@ -10,47 +10,20 @@ logger = logging.getLogger(__name__)
 
 CLARIFICATION_ANSWER_FLAG = "is_clarification_answer"
 
-# Clear compensation/credential phrasings only. Ambiguous terms that caused
-# false positives ("earnings", "bonus", "credential(s)") are deliberately
-# excluded; the Postgres role remains the security boundary.
+# Unambiguous compensation/credential terms only. Ambiguous synonyms
+# ("compensation", "bonus", "income", "access token", "how much does X make")
+# are deliberately excluded; the Postgres role remains the security boundary,
+# and Finalize maps a real denial to a user-facing permission message.
 SENSITIVE_PATTERNS = (
-    # Compensation / payroll
     "salary",
     "salaries",
-    "compensation",
-    "wage",
-    "wages",
-    "remuneration",
-    "payroll",
-    "paycheck",
-    "get paid",
-    "base pay",
-    "annual pay",
-    "pay rate",
-    "income",
-    "pay grade",
-    "take-home pay",
-    "net pay",
-    "gross pay",
-    # Credentials
     "password",
     "password hash",
     "api key",
-    "access token",
-    "client secret",
-    "secret key",
 )
 
 _SENSITIVE_RE = re.compile(
     r"\b(?:" + "|".join(SENSITIVE_PATTERNS) + r")\b",
-    re.IGNORECASE,
-)
-
-# "How much does Alice Example make?" — a person's pay, without matching
-# company revenue questions like "how much do we make in sales?".
-_MAKE_MONEY_RE = re.compile(
-    r"\bhow much\b[^.?!]{0,30}\b(?:does|do)\b"
-    r"(?!\s+(?:we|they|i|you)\b)[^.?!]{0,30}\bmake\b",
     re.IGNORECASE,
 )
 
@@ -66,7 +39,7 @@ def mentions_sensitive_data(text: str | None) -> bool:
     if not normalized:
         return False
 
-    match = _SENSITIVE_RE.search(normalized) or _MAKE_MONEY_RE.search(normalized)
+    match = _SENSITIVE_RE.search(normalized)
     if match:
         logger.debug(
             "sensitive_intent_detected",

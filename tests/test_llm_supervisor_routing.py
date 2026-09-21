@@ -15,6 +15,7 @@ import pytest
 
 from agents.supervisor import (
     MAX_PLAN_STEPS,
+    _validate_plan,
     gather_context,
     get_supervisor_decision,
     get_workflow_plan,
@@ -198,7 +199,8 @@ def _plan_routes(prompt: str) -> list[str]:
         turn_count=1,
     )
     context = gather_context(state, task_history=[], user_id=None)
-    return [item.route for item in get_workflow_plan(context, llm())]
+    plan, _ = _validate_plan(get_workflow_plan(context, llm()), state)
+    return [item.route for item in plan]
 
 
 def _report(label, hits, total, min_accuracy, mistakes):
@@ -361,7 +363,7 @@ PLANNER_CASES = [
     ),
     (
         "Who is the current CEO of Tesla, how many employees do we have, "
-        "and chart the sales by region.",
+        "and make a pie chart: 60% EU, 40% US.",
         ["research", "sql", "visu"],
     ),
 ]

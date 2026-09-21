@@ -9,14 +9,17 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agents.supervisor import (
+    MAX_HOPS,
     MAX_PLAN_STEPS,
     get_supervisor_decision,
     supervisor_agent,
     _apply_clarification_cap,
     _maybe_insert_visu,
     _plan_from_workflow,
+    _skip_blocked_steps,
     _skip_unbudgeted_visu,
     _user_wants_visualization,
+    _validate_plan,
 )
 from state.state import PlanItem, SpecialistResult, SupervisorState
 from state.structure_output import PlanStep, WorkflowPlan
@@ -180,24 +183,68 @@ def test_plan_from_workflow_builds_ordered_steps():
     assert all(item.status == "pending" for item in plan)
 
 
-def test_plan_from_workflow_clarification_is_alone():
-    workflow = WorkflowPlan(
-        steps=[
-            PlanStep(route="clarification", task="Which report?"),
-            PlanStep(route="sql", task="count"),
-        ]
-    )
-    plan = _plan_from_workflow(workflow)
-    assert [item.route for item in plan] == ["clarification"]
+def test_validate_plan_clarification_is_alone():
+    plan = [
+        PlanItem(route="clarification", task="Which report?"),
+        PlanItem(route="sql", task="count"),
+    ]
+    validated, note = _validate_plan(plan, _state(text="unclear"))
+    assert [item.route for item in validated] == ["clarification"]
+    assert note is None
 
 
-def test_plan_from_workflow_caps_steps():
-    workflow = WorkflowPlan(
-        steps=[
-            PlanStep(route="sql", task=f"task {i}") for i in range(MAX_PLAN_STEPS + 2)
-        ]
+def test_validate_plan_caps_steps_and_notes_dropped():
+    plan = [PlanItem(route="sql", task=f"task {i}") for i in range(MAX_PLAN_STEPS + 2)]
+    validated, note = _validate_plan(plan, _state(text="do these"))
+    assert len(validated) == MAX_PLAN_STEPS
+    assert note is not None
+    assert "task 3" in note and "task 4" in note
+
+
+def test_validate_plan_keeps_consecutive_distinct_same_route():
+    plan = [
+        PlanItem(route="sql", task="count employees"),
+        PlanItem(route="sql", task="total sales"),
+    ]
+    validated, _ = _validate_plan(plan, _state(text="count employees and total sales"))
+    assert [item.task for item in validated] == ["count employees", "total sales"]
+
+
+def test_validate_plan_dedupes_identical_route_and_task():
+    plan = [
+        PlanItem(route="sql", task="count employees"),
+        PlanItem(route="sql", task="  Count   Employees "),
+    ]
+    validated, _ = _validate_plan(plan, _state(text="count employees"))
+    assert len(validated) == 1
+
+
+def test_validate_plan_drops_database_visu_without_sql():
+    plan = [PlanItem(route="visu", task="chart it", data_source="database")]
+    validated, _ = _validate_plan(plan, _state(text="chart it"))
+    assert [item.route for item in validated] == ["clarification"]
+
+
+def test_validate_plan_drops_inline_visu_without_enough_numbers():
+    plan = [
+        PlanItem(route="visu", task="chart it", data_source="inline"),
+    ]
+    validated, _ = _validate_plan(plan, _state(text="chart the sales for 2024"))
+    assert [item.route for item in validated] == ["clarification"]
+
+
+def test_validate_plan_keeps_inline_visu_with_two_values():
+    plan = [
+        PlanItem(
+            route="visu",
+            task="pie chart: 60 EU, 40 US",
+            data_source="inline",
+        ),
+    ]
+    validated, _ = _validate_plan(
+        plan, _state(text="pie chart: 60 EU, 40 US")
     )
-    assert len(_plan_from_workflow(workflow)) == MAX_PLAN_STEPS
+    assert [item.route for item in validated] == ["visu"]
 
 
 def test_plan_from_workflow_carries_visu_data_source():
@@ -328,12 +375,78 @@ def test_skip_unbudgeted_visu_allows_deterministic_visu():
         last_result=_done_sql_with_rows(),
         turn_count=1,
     )
-    plan = [PlanItem(route="visu", task="chart")]
+    plan = [
+        PlanItem(
+            route="sql",
+            task="sales",
+            status="done",
+            structured_data=[{"label": "a", "value": 1}],
+        ),
+        PlanItem(route="visu", task="chart", data_source="database"),
+    ]
 
     with budget_scope(TurnBudget(max_calls=0, max_tokens=0, max_seconds=0.0)):
         updated = _skip_unbudgeted_visu(plan, state)
 
-    assert updated[0].status == "pending"
+    assert updated[1].status == "pending"
+
+
+def test_skip_blocked_steps_skips_database_visu_without_sql():
+    plan = [PlanItem(route="visu", task="chart", data_source="database")]
+    updated = _skip_blocked_steps(plan)
+    assert updated[0].status == "skipped"
+    assert updated[0].issue == "no_data_for_chart"
+
+
+def test_skip_blocked_steps_waits_for_pending_sql():
+    plan = [
+        PlanItem(route="sql", task="sales", status="pending"),
+        PlanItem(route="visu", task="chart", data_source="database"),
+    ]
+    updated = _skip_blocked_steps(plan)
+    assert updated[1].status == "pending"
+
+
+def test_skip_blocked_steps_skips_after_failed_sql():
+    plan = [
+        PlanItem(route="sql", task="sales", status="failed", issue="invalid_request"),
+        PlanItem(route="visu", task="chart", data_source="database"),
+    ]
+    updated = _skip_blocked_steps(plan)
+    assert updated[1].status == "skipped"
+    assert updated[1].issue == "no_data_for_chart"
+
+
+def test_skip_blocked_steps_skips_when_sql_returned_no_rows():
+    plan = [
+        PlanItem(route="sql", task="sales", status="done"),
+        PlanItem(route="visu", task="chart", data_source="database"),
+    ]
+    updated = _skip_blocked_steps(plan)
+    assert updated[1].status == "skipped"
+
+
+def test_skip_blocked_steps_allows_database_visu_with_rows():
+    plan = [
+        PlanItem(
+            route="sql",
+            task="sales",
+            status="done",
+            structured_data=[{"label": "a", "value": 1}],
+        ),
+        PlanItem(route="visu", task="chart", data_source="database"),
+    ]
+    updated = _skip_blocked_steps(plan)
+    assert updated[1].status == "pending"
+
+
+def test_skip_blocked_steps_never_skips_inline_visu():
+    plan = [
+        PlanItem(route="sql", task="sales", status="failed"),
+        PlanItem(route="visu", task="pie: 1, 2", data_source="inline"),
+    ]
+    updated = _skip_blocked_steps(plan)
+    assert updated[1].status == "pending"
 
 
 def test_clarification_cap_converts_to_convo():
@@ -479,7 +592,10 @@ def test_supervisor_agent_auto_visu_skips_llm(monkeypatch):
 
     update = supervisor_agent(state, {"configurable": {}})
     assert update["next"] == "visu"
-    assert "last_result" not in update
+    assert update["last_result"].structured_data == [
+        {"label": "MENA", "value": 1200.5},
+        {"label": "EU", "value": 800.0},
+    ]
 
 
 def test_supervisor_does_not_loop_back_to_visu_after_done(monkeypatch):
@@ -530,7 +646,7 @@ def test_supervisor_skips_llm_visu_when_budget_exhausted(monkeypatch):
     state.plan_ready = True
     state.plan = [
         PlanItem(route="sql", task="sales by region", status="pending"),
-        PlanItem(route="visu", task="chart"),
+        PlanItem(route="visu", task="pie: 1, 2", data_source="inline"),
     ]
 
     with budget_scope(TurnBudget(max_calls=0, max_tokens=0, max_seconds=0.0)):
@@ -590,4 +706,69 @@ def test_supervisor_preserves_last_result_for_database_visu(monkeypatch):
     update = supervisor_agent(state, {"configurable": {}})
 
     assert update["next"] == "visu"
-    assert "last_result" not in update
+    assert update["last_result"] is not None
+    assert update["last_result"].structured_data == [
+        {"label": "MENA", "value": 1200.5},
+        {"label": "EU", "value": 800.0},
+    ]
+
+
+def test_supervisor_resupplies_rows_when_rag_sits_before_visu(monkeypatch):
+    """sql -> rag -> visu: the rag step clears last_result, but routing to the
+    database visu must re-supply the upstream sql rows."""
+    def boom(*_a, **_k):
+        raise AssertionError("no LLM call expected while routing to visu")
+
+    monkeypatch.setattr("agents.supervisor.llm", boom)
+
+    state = _state(
+        text="Count employees, summarize the policy, and chart sales by region",
+        last_result=SpecialistResult(source="rag", summary="Policy text", status="done"),
+        current_task="policy",
+        turn_count=1,
+    )
+    state.plan_ready = True
+    state.plan = [
+        PlanItem(
+            route="sql",
+            task="sales",
+            status="done",
+            structured_data=[{"label": "a", "value": 1}],
+        ),
+        PlanItem(route="rag", task="policy", status="pending"),
+        PlanItem(route="visu", task="chart", data_source="database"),
+    ]
+
+    update = supervisor_agent(state, {"configurable": {}})
+
+    assert update["next"] == "visu"
+    assert update["last_result"].structured_data == [{"label": "a", "value": 1}]
+
+
+def test_supervisor_cuts_turn_short_at_hop_cap(monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("no LLM call expected at the hop cap")
+
+    monkeypatch.setattr("agents.supervisor.llm", boom)
+
+    state = _state(
+        text="count, then policy, then more",
+        last_result=SpecialistResult(source="convo", summary="ok", status="done"),
+        current_task="step",
+        turn_count=1,
+    )
+    state.plan_ready = True
+    state.hops = MAX_HOPS
+    state.plan = [
+        PlanItem(route="convo", task="step one", status="pending"),
+        PlanItem(route="convo", task="step two", status="pending"),
+    ]
+
+    update = supervisor_agent(state, {"configurable": {}})
+
+    assert update["next"] == "end"
+    assert update["turn_cut_short"] is True
+    assert update["hops"] == MAX_HOPS + 1
+    assert update["plan"][1].status == "failed"
+    assert update["plan"][1].issue == "turn_cut_short"
+    assert update["plan"][1].result_summary is None

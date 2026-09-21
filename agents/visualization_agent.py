@@ -53,6 +53,30 @@ def Visualization(state: SupervisorState) -> dict:
 
     try:
 
+        pending_visu = next(
+            (
+                item
+                for item in state.plan
+                if item.route == "visu" and item.status == "pending"
+            ),
+            None,
+        )
+        if (
+            pending_visu is not None
+            and pending_visu.data_source != "inline"
+            and not (
+                state.last_result is not None
+                and state.last_result.structured_data
+            )
+        ):
+            # A database-backed chart with no rows can only fail or invent
+            # numbers via the LLM fallback; fail fast instead.
+            logger.warning("[VISU] no structured_data for database chart")
+            return _failed_result(
+                "The chart was skipped because the data was unavailable.",
+                "no_data_for_chart",
+            )
+
         if (
             state.last_result is not None
             and state.last_result.structured_data

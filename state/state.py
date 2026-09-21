@@ -185,6 +185,20 @@ class SupervisorState(BaseModel):
                     "usable, so Finalize emits a static message without calling "
                     "the model again."
     )
+    hops: int = Field(
+        default=0,
+        description="Routed steps taken this turn; reset by memory_manager and "
+                    "capped by MAX_HOPS as a loop backstop."
+    )
+    plan_note: Optional[str] = Field(
+        default=None,
+        description="User-facing note when the planner produced more asks than "
+                    "MAX_PLAN_STEPS and the rest were dropped."
+    )
+    turn_cut_short: bool = Field(
+        default=False,
+        description="Set when the hop cap ended the turn early; Finalize says so."
+    )
 
 
 class SubGraphSupervisorState(BaseModel):

@@ -65,7 +65,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
         return {
             "last_result": SpecialistResult(
                 source="sql",
-                summary="Salary and credential data require elevated permissions.",
+                summary="That request needs data your permission level can't access.",
                 status="failed",
                 issue="permission_denied",
             )
@@ -168,7 +168,7 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
                 return {
                     "last_result": SpecialistResult(
                         source="sql",
-                        summary="This request requires data or tools that are not available for the current permission level.",
+                        summary="That request needs data your permission level can't access.",
                         status="failed",
                         issue="permission_denied",
                     )
@@ -179,6 +179,15 @@ def Sql_agent(state: SupervisorState, config: RunnableConfig) -> dict:
             except (psycopg.Error, ValueError, RuntimeError) as e:
                 err = str(e).lower()
                 logger.warning("[SQL] tool error: %s: %s", type(e).__name__, e)
+                if isinstance(e, psycopg.errors.InsufficientPrivilege) or "permission denied" in err:
+                    return {
+                        "last_result": SpecialistResult(
+                            source="sql",
+                            summary="That request needs data your permission level can't access.",
+                            status="failed",
+                            issue="permission_denied",
+                        )
+                    }
                 if any(x in err for x in ["does not exist", "undefined table", "undefined column"]):
                     return {
                         "last_result": SpecialistResult(

@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 MAX_CLARIFICATIONS_PER_TURN = 1
 MAX_PLAN_STEPS = 3
+MAX_HOPS = MAX_PLAN_STEPS + MAX_CLARIFICATIONS_PER_TURN + 1
 
 
 def _end_decision() -> SupervisorDecision:
@@ -56,7 +57,6 @@ Decide the single best next route for the latest user request.
 - Questions about what a document/policy/procedure says, or what was learned from past projects → rag.
 - Questions about current, latest, or time-sensitive external facts (current CEO/president, latest price, today's weather, recent news) → research, even without an explicit "research" verb.
 - Definitions and general knowledge (e.g. "What does SQL stand for?", "What does RAG mean?") → convo, never sql.
-- If the latest user message contains multiple distinct asks and the last specialist result only answered part of it, route to the appropriate specialist for the remaining part instead of ending.
 - Focus almost exclusively on the latest user message and the latest specialist result. Ignore older conversation history unless it is directly needed to understand the current request.
 
 ### sql vs rag
@@ -177,9 +177,13 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
         update["task_history"] = task_history
         update["plan"] = plan
         update["plan_ready"] = True
+        update["hops"] = state.hops
+        update["plan_note"] = state.plan_note
+        update["turn_cut_short"] = state.turn_cut_short
         return update
 
     user_id = (config.get("configurable") or {}).get("user_id")
+    plan_note = state.plan_note
 
     if not state.plan_ready:
         try:
@@ -212,7 +216,13 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
                 logger.warning("supervisor_turn_budget_exceeded", extra={"error": str(e)})
 
             if fallback is not None and fallback.next != "end":
-                plan = [PlanItem(route=fallback.next, task=fallback.current_task)]
+                plan = [
+                    PlanItem(
+                        route=fallback.next,
+                        task=fallback.current_task,
+                        data_source="inline" if fallback.next == "visu" else None,
+                    )
+                ]
             elif fallback is None and not outage:
                 request = latest_user_request(state.messages) or ""
                 if mentions_sensitive_data(request):
@@ -220,12 +230,38 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
                 else:
                     plan = [PlanItem(route="convo", task=_OUTAGE_TASK)]
 
+        if not outage and plan:
+            plan, plan_note = _validate_plan(plan, state)
+
         plan = _apply_clarification_cap(plan, state)
 
     plan = _maybe_insert_visu(plan, state)
+    plan = _skip_blocked_steps(plan)
     plan = _skip_unbudgeted_visu(plan, state)
 
     decision = _end_decision() if outage else _next_plan_decision(plan)
+
+    # Cheap loop backstop: end the turn when it exceeds the legitimate step
+    # budget. This should be unreachable; if it fires, a plan invariant broke.
+    hops = state.hops
+    turn_cut_short = state.turn_cut_short
+    if decision.next != "end":
+        hops += 1
+        if hops > MAX_HOPS:
+            logger.error(
+                "hop_cap_exceeded_cutting_turn_short",
+                extra={
+                    "hops": hops,
+                    "plan": [(item.route, item.status) for item in plan],
+                },
+            )
+            turn_cut_short = True
+            for item in plan:
+                if item.status == "pending":
+                    item.status = "failed"
+                    item.issue = "turn_cut_short"
+                    item.result_summary = None
+            decision = _end_decision()
 
     logger.debug(
         "final_decision",
@@ -240,17 +276,30 @@ def supervisor_agent(state: SupervisorState, config: RunnableConfig) -> dict:
     update["task_history"] = task_history
     update["plan"] = plan
     update["plan_ready"] = True
+    update["hops"] = hops
+    update["plan_note"] = plan_note
+    update["turn_cut_short"] = turn_cut_short
 
     next_item = _next_pending(plan)
-    if (
-        decision.next == "visu"
-        and next_item is not None
-        and next_item.route == "visu"
-        and next_item.data_source == "inline"
-    ):
-        # Inline charts must extract their values from the current task; do not
-        # let a stale structured_data result override the user's own numbers.
-        update["last_result"] = None
+    if decision.next == "visu" and next_item is not None and next_item.route == "visu":
+        if next_item.data_source == "inline":
+            # Inline charts must extract their values from the current task; do
+            # not let a stale structured_data result override the user's numbers.
+            update["last_result"] = None
+        else:
+            index = next(
+                (i for i, item in enumerate(plan) if item is next_item), None
+            )
+            rows = _rows_upstream(plan, index) if index is not None else None
+            if rows:
+                # Re-supply the upstream sql rows explicitly: an intervening
+                # step (e.g. rag) may have cleared last_result.
+                update["last_result"] = SpecialistResult(
+                    source="sql",
+                    summary="Upstream structured data for the chart.",
+                    status="done",
+                    structured_data=rows,
+                )
 
     if decision.next == "clarification":
         update["clarification_question"] = _generate_clarification_question(decision)
@@ -305,19 +354,10 @@ def build_planning_prompt(context: dict) -> list:
 
 
 def _plan_from_workflow(workflow: WorkflowPlan) -> list[PlanItem]:
-    steps = list(workflow.steps)[:MAX_PLAN_STEPS]
-
-    clarification = next((s for s in steps if s.route == "clarification"), None)
-    if clarification is not None:
-        return [
-            PlanItem(
-                route="clarification",
-                task=clarification.task or "The request was unclear.",
-            )
-        ]
-
+    """Map the planner's workflow into plan items; filtering, ordering
+    guarantees, and the step cap live in _validate_plan."""
     plan: list[PlanItem] = []
-    for index, step in enumerate(steps):
+    for index, step in enumerate(workflow.steps):
         if not step.task or not step.task.strip():
             continue
 
@@ -328,7 +368,7 @@ def _plan_from_workflow(workflow: WorkflowPlan) -> list[PlanItem]:
             # charts inline values from the user message.
             data_source = (
                 "database"
-                if any(s.route == "sql" for s in steps[:index])
+                if any(s.route == "sql" for s in workflow.steps[:index])
                 else "inline"
             )
 
@@ -343,6 +383,78 @@ def _plan_from_workflow(workflow: WorkflowPlan) -> list[PlanItem]:
     return plan
 
 
+_TASK_WS_RE = re.compile(r"\s+")
+_NUMERIC_TOKEN_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+
+
+def _normalized_task(task: str) -> str:
+    return _TASK_WS_RE.sub(" ", task.strip().lower())
+
+
+def _validate_plan(
+    plan: list[PlanItem], state: SupervisorState
+) -> tuple[list[PlanItem], Optional[str]]:
+    """Deterministic guardrails for a model-produced plan.
+
+    Enforces clarification-only, drops exact duplicate consecutive steps, keeps
+    only chart steps that can actually run, caps the plan, and replaces an
+    empty result with a clarification instead of a silent end.
+    """
+    clarification = next((i for i in plan if i.route == "clarification"), None)
+    if clarification is not None:
+        return [
+            PlanItem(
+                route="clarification",
+                task=clarification.task or "The request was unclear.",
+            )
+        ], None
+
+    request = " ".join(
+        part
+        for part in [latest_user_request(state.messages) or "", *clarification_answers(state.messages)]
+        if part
+    )
+    # An inline chart must supply at least two values, otherwise there is
+    # nothing to plot and extraction can only fail or invent numbers.
+    enough_numbers = len(_NUMERIC_TOKEN_RE.findall(request)) >= 2
+
+    deduped: list[PlanItem] = []
+    for item in plan:
+        if (
+            deduped
+            and deduped[-1].route == item.route
+            and _normalized_task(deduped[-1].task) == _normalized_task(item.task)
+        ):
+            continue
+        deduped.append(item)
+
+    valid: list[PlanItem] = []
+    for index, item in enumerate(deduped):
+        if item.route == "visu":
+            if item.data_source == "inline" and not enough_numbers:
+                continue
+            if item.data_source != "inline":
+                if not any(p.route == "sql" for p in deduped[:index]):
+                    continue
+                item.data_source = "database"
+        valid.append(item)
+
+    kept, dropped = valid[:MAX_PLAN_STEPS], valid[MAX_PLAN_STEPS:]
+    note = None
+    if dropped:
+        asks = "; ".join(item.task for item in dropped)
+        note = (
+            f"I focused on the first {MAX_PLAN_STEPS} of {len(valid)} requested "
+            f"steps. Not covered: {asks}."
+        )
+
+    if not kept:
+        task = request or state.current_task or "The request was unclear."
+        return [PlanItem(route="clarification", task=task)], note
+
+    return kept, note
+
+
 def get_workflow_plan(context: dict, model, max_attempts: int = 2) -> list[PlanItem]:
     """One LLM call decomposes the request into an ordered plan.
 
@@ -354,19 +466,20 @@ def get_workflow_plan(context: dict, model, max_attempts: int = 2) -> list[PlanI
     for _attempt in range(1, max_attempts + 1):
         classes: list[str | None] = []
 
-        for method in ("function_calling",):
-            try:
-                structured = model.with_structured_output(WorkflowPlan, method=method)
-                raw = structured.invoke(build_planning_prompt(context))
-                workflow = (
-                    raw if isinstance(raw, WorkflowPlan)
-                    else WorkflowPlan.model_validate(raw)
-                )
-                return _plan_from_workflow(workflow)
-            except TurnBudgetExceeded:
-                raise
-            except Exception as e:
-                classes.append(classify_llm_error(e))
+        try:
+            structured = model.with_structured_output(
+                WorkflowPlan, method="function_calling"
+            )
+            raw = structured.invoke(build_planning_prompt(context))
+            workflow = (
+                raw if isinstance(raw, WorkflowPlan)
+                else WorkflowPlan.model_validate(raw)
+            )
+            return _plan_from_workflow(workflow)
+        except TurnBudgetExceeded:
+            raise
+        except Exception as e:
+            classes.append(classify_llm_error(e))
 
         last_class = (
             "auth" if "auth" in classes
@@ -418,27 +531,29 @@ def _apply_clarification_cap(
     return plan
 
 
+def _rows_upstream(plan: list[PlanItem], idx: int) -> list[dict] | None:
+    """The nearest done sql step's chartable rows before index ``idx``."""
+    for prev in reversed(plan[:idx]):
+        if prev.route == "sql" and prev.status == "done" and prev.structured_data:
+            return prev.structured_data
+    return None
+
+
 def _maybe_insert_visu(
     plan: list[PlanItem], state: SupervisorState
 ) -> list[PlanItem]:
-    """Add a visu step at most once per turn, and only when the previous
-    result already carries structured_data (so it renders deterministically).
+    """Additive backstop: add one visu step when the user asked for a chart and
+    an upstream sql step already produced rows, in case the planner omitted it.
 
-    Re-inserting after a visu has already run would route back to a visu with
-    no structured_data, which falls back to an LLM call and can loop until the
-    turn budget is spent.
+    Never re-inserts once any visu exists (in any status), and never inserts
+    without rows, so it cannot route to an LLM-dependent visu or loop.
     """
     if any(item.route == "visu" for item in plan):
         return plan
     if not _user_wants_visualization(state):
         return plan
 
-    last = state.last_result
-    if (
-        last is not None
-        and last.status == "done"
-        and last.structured_data
-    ):
+    if _rows_upstream(plan, len(plan)) is not None:
         plan.append(
             PlanItem(
                 route="visu",
@@ -449,6 +564,33 @@ def _maybe_insert_visu(
                 ),
             )
         )
+    return plan
+
+
+def _skip_blocked_steps(plan: list[PlanItem]) -> list[PlanItem]:
+    """Skip a database-backed visu that can never get its data.
+
+    A visu still waiting on a pending sql step is left alone; once every
+    upstream sql step has finished, a missing row set means no data is coming.
+    Inline visus carry their own values and are never skipped here.
+    """
+    for index, item in enumerate(plan):
+        if (
+            item.status != "pending"
+            or item.route != "visu"
+            or item.data_source == "inline"
+        ):
+            continue
+
+        upstream_sql = [p for p in plan[:index] if p.route == "sql"]
+        if any(p.status == "pending" for p in upstream_sql):
+            continue
+        if not upstream_sql or _rows_upstream(plan, index) is None:
+            item.status = "skipped"
+            item.issue = "no_data_for_chart"
+            item.result_summary = (
+                "The chart was skipped because the data was unavailable."
+            )
     return plan
 
 
@@ -463,15 +605,14 @@ def _skip_unbudgeted_visu(
     if budget is None or not budget.exhausted():
         return plan
 
-    last_has_rows = (
-        state.last_result is not None and state.last_result.structured_data
-    )
-
-    for item in plan:
+    for index, item in enumerate(plan):
         if item.route != "visu" or item.status != "pending":
             continue
 
-        deterministic = item.data_source != "inline" and last_has_rows
+        deterministic = (
+            item.data_source != "inline"
+            and _rows_upstream(plan, index) is not None
+        )
         if not deterministic:
             item.status = "failed"
             item.issue = "budget_exceeded"
@@ -641,26 +782,24 @@ def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> Opti
     last_class: str | None = None  # most recent attempt only
 
     for attempt in range(1, max_attempts + 1):
-        prompt = build_prompt(
-            context,
-            previous_error=None if last_class else last_error,
-        )
+        prompt = build_prompt(context, previous_error=last_error)
         classes: list[str | None] = []
         errors: list[str] = []
 
         # json_mode is unusable with Groq (it requires the literal word "json"
         # in the prompt), so function_calling is the only structured method.
-        for method in ("function_calling",):
-            try:
-                structured = model.with_structured_output(SupervisorDecision, method=method)
-                raw = structured.invoke(prompt)
-                return SupervisorDecision.model_validate(raw)
-            except TurnBudgetExceeded:
-                # Not a schema/provider failure: don't retry, don't classify.
-                raise
-            except Exception as e:
-                errors.append(f"{method}: {e}")
-                classes.append(classify_llm_error(e))
+        try:
+            structured = model.with_structured_output(
+                SupervisorDecision, method="function_calling"
+            )
+            raw = structured.invoke(prompt)
+            return SupervisorDecision.model_validate(raw)
+        except TurnBudgetExceeded:
+            # Not a schema/provider failure: don't retry, don't classify.
+            raise
+        except Exception as e:
+            errors.append(f"function_calling: {e}")
+            classes.append(classify_llm_error(e))
 
         last_error = " | ".join(errors)
         last_class = (
