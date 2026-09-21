@@ -322,7 +322,7 @@ def get_workflow_plan(context: dict, model, max_attempts: int = 2) -> list[PlanI
     for _attempt in range(1, max_attempts + 1):
         classes: list[str | None] = []
 
-        for method in ("function_calling", "json_mode"):
+        for method in ("function_calling",):
             try:
                 structured = model.with_structured_output(WorkflowPlan, method=method)
                 raw = structured.invoke(build_planning_prompt(context))
@@ -569,7 +569,9 @@ def get_supervisor_decision(context: dict, model, max_attempts: int = 2) -> Opti
         classes: list[str | None] = []
         errors: list[str] = []
 
-        for method in ("function_calling","json_mode"):
+        # json_mode is unusable with Groq (it requires the literal word "json"
+        # in the prompt), so function_calling is the only structured method.
+        for method in ("function_calling",):
             try:
                 structured = model.with_structured_output(SupervisorDecision, method=method)
                 raw = structured.invoke(prompt)
