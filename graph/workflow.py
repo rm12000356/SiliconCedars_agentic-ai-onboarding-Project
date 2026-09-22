@@ -7,9 +7,9 @@ from graph.routing import route_supervisor, route_sub_supervisor
 
 from agents.conversation_agent import Convo
 from agents.rag_agent import RAG
-from agents.research.report_writer import Report_W
+from agents.research.report_writer import report_writer
 from agents.research.researcher import Research
-from agents.research.supervisor import Sub_controler
+from agents.research.supervisor import sub_controller
 from agents.supervisor import supervisor_agent
 from agents.sql_agent import Sql_agent
 from agents.visualization_agent import Visualization
@@ -22,7 +22,7 @@ def has_pending_interrupt(snapshot) -> bool:
     return bool(getattr(snapshot, "interrupts", ()) or ())
 
 
-def Main_WorkFlow(memory = None):
+def main_workflow(memory = None):
 
     subgraph = sub_workflow()
 
@@ -77,14 +77,14 @@ def sub_workflow():
 
     builder = StateGraph(SubGraphSupervisorState)
 
-    builder.add_node("controler", Sub_controler)
+    builder.add_node("controller", sub_controller)
     builder.add_node("research", Research)
-    builder.add_node("report", Report_W)
+    builder.add_node("report", report_writer)
 
-    builder.add_edge(START, "controler")
+    builder.add_edge(START, "controller")
 
     builder.add_conditional_edges(
-        "controler",
+        "controller",
         route_sub_supervisor,
         {
             "researcher": "research",
@@ -93,12 +93,12 @@ def sub_workflow():
         }
     )
 
-    builder.add_edge("research", "controler")
-    builder.add_edge("report", "controler")
+    builder.add_edge("research", "controller")
+    builder.add_edge("report", "controller")
 
     graph = builder.compile()
 
     return graph
 
 if __name__ == "__main__":
-    Main_WorkFlow()
+    main_workflow()

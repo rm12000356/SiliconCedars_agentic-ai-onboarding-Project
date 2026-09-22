@@ -1,8 +1,8 @@
-from graph.workflow import Main_WorkFlow, sub_workflow
+from graph.workflow import main_workflow, sub_workflow
 
 
 def test_main_graph_compiles():
-    graph = Main_WorkFlow()
+    graph = main_workflow()
     nodes = set(graph.get_graph().nodes)
     for required in (
         "memory_manager", "supervisor", "sql", "rag", "research",
@@ -14,5 +14,5 @@ def test_main_graph_compiles():
 def test_research_subgraph_compiles():
     graph = sub_workflow()
     nodes = set(graph.get_graph().nodes)
-    for required in ("controler", "research", "report"):
+    for required in ("controller", "research", "report"):
         assert required in nodes

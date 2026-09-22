@@ -1,0 +1,18 @@
+[run]
+source =
+    agents
+    evaluation
+    graph
+    rag
+    services
+    state
+    tools
+omit =
+    */tests/*
+    */__pycache__/*
+
+[report]
+show_missing = True
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:

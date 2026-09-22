@@ -29,6 +29,11 @@ OUTAGE_MESSAGE = (
     "Please try again in a moment."
 )
 
+INTERNAL_ERROR_MESSAGE = (
+    "Something went wrong while handling that request. "
+    "Please try again or rephrase it."
+)
+
 TURN_CUT_SHORT_NOTE = (
     "This turn was cut short because it needed more steps than the "
     "assistant allows in one go. Please narrow the request."
@@ -58,6 +63,10 @@ _ISSUE_MESSAGES = {
     "invalid_chart_spec": "That request didn't contain valid chart data.",
     "no_data_for_chart": (
         "I couldn't build that chart because the data it needed wasn't available."
+    ),
+    "not_chartable": (
+        "I couldn't build that chart because the result doesn't have a label "
+        "and a number (a chart needs exactly two columns)."
     ),
     "turn_cut_short": "This turn needed more steps than allowed in one go.",
     "empty_answer": "I couldn't produce an answer from the data retrieved.",

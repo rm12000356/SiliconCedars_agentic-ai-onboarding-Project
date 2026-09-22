@@ -191,6 +191,28 @@ def test_skipped_step_uses_user_facing_message():
     assert "data it needed" in content.lower()
 
 
+def test_not_chartable_step_uses_distinct_message():
+    state = SupervisorState(
+        messages=[HumanMessage(content="chart sales")],
+        plan=[
+            PlanItem(
+                route="visu",
+                task="chart",
+                status="skipped",
+                issue="not_chartable",
+                result_summary="The chart was skipped because the result had no chartable data.",
+            )
+        ],
+        turn_count=1,
+    )
+
+    update = Finalize(state, _config())
+    content = update["messages"][0].content
+
+    assert "chart" in content.lower()
+    assert "label and a number" in content.lower()
+
+
 def test_plan_note_is_appended():
     state = SupervisorState(
         messages=[HumanMessage(content="do many things")],

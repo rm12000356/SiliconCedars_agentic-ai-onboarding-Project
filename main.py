@@ -1,22 +1,26 @@
+import logging
 import os
 
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from evaluation.evaluation import run_routing_evaluation, run_rag_evaluation
 
-from graph.workflow import Main_WorkFlow
+from graph.workflow import main_workflow
 from agents.clarification import resume_clarification
-from agents.finalize import OUTAGE_MESSAGE
+from agents.finalize import OUTAGE_MESSAGE, INTERNAL_ERROR_MESSAGE
+from services.errors import is_provider_outage
 from services.memory import get_checkpointer
 from services.budget import budget_scope, TurnBudgetExceeded
 from services.logging_config import configure_logging
+
+logger = logging.getLogger(__name__)
 
 
 def run():
     configure_logging()
     memory , memory_context = get_checkpointer()
     try:
-        graph = Main_WorkFlow(memory)
+        graph = main_workflow(memory)
 
         user_id = os.getenv("DEFAULT_USER_ID", "test-user-1")
         thread_id = os.getenv("DEFAULT_THREAD_ID", "thread-test-user-1")
@@ -72,8 +76,15 @@ def run():
                             answer,
                             config,
                         )
-            except (TurnBudgetExceeded, RuntimeError):
+            except TurnBudgetExceeded:
                 print(f"\nAssistant: {OUTAGE_MESSAGE}")
+                continue
+            except Exception as exc:
+                if is_provider_outage(exc):
+                    print(f"\nAssistant: {OUTAGE_MESSAGE}")
+                else:
+                    logger.exception("graph invoke failed")
+                    print(f"\nAssistant: {INTERNAL_ERROR_MESSAGE}")
                 continue
 
             messages = result.get("messages") or []

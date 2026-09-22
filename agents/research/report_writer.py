@@ -26,7 +26,7 @@ was found, say so plainly here even if the report text itself is written diploma
 """
 
 
-def Report_W(state: SubGraphSupervisorState) -> dict:
+def report_writer(state: SubGraphSupervisorState) -> dict:
     logger.debug("[REPORT] task=%r", state.task)
     logger.debug("[REPORT] %s messages received", len(state.research_messages))
     if not state.research_messages:

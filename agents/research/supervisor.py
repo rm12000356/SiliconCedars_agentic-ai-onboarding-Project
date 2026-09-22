@@ -91,7 +91,7 @@ def _clean_latest_content(messages, max_chars: int = 2000) -> str:
     return text[:max_chars]
 
 
-def Sub_controler(state: SubGraphSupervisorState) -> dict:
+def sub_controller(state: SubGraphSupervisorState) -> dict:
 
     if state.report_written:
         logger.debug("[SUB-SUPERVISOR] report already written, ending research subgraph")

@@ -17,11 +17,12 @@ from chainlit.server import app
 from langchain_core.runnables import RunnableConfig
 from services.memory import get_checkpointer
 from services.chart_storage import LocalChartStorage
-from graph.workflow import Main_WorkFlow, has_pending_interrupt
+from graph.workflow import main_workflow, has_pending_interrupt
 from services.auth import authenticate
 from services.budget import budget_scope, TurnBudgetExceeded
 from services.logging_config import configure_logging
-from agents.finalize import OUTAGE_MESSAGE
+from services.errors import is_provider_outage
+from agents.finalize import OUTAGE_MESSAGE, INTERNAL_ERROR_MESSAGE
 
 load_dotenv()
 configure_logging()
@@ -102,7 +103,7 @@ app.router.routes[_included_router_idx:_included_router_idx] = chart_routes.rout
 
 
 memory, memory_context = get_checkpointer()
-graph = Main_WorkFlow(memory)
+graph = main_workflow(memory)
 
 logger.info("GRAPH: %s", type(graph))
 logger.info(
@@ -195,9 +196,17 @@ async def main(message: cl.Message):
                     cast(Any, {"messages": [HumanMessage(content=message.content)]}),
                     config,
                 )
-    except (TurnBudgetExceeded, RuntimeError):
-        logger.exception("graph invoke failed; returning outage message")
+    except TurnBudgetExceeded:
+        logger.warning("turn budget exceeded; returning outage message")
         await cl.Message(content=OUTAGE_MESSAGE).send()
+        return
+    except Exception as exc:
+        if is_provider_outage(exc):
+            logger.warning("provider outage; returning outage message", exc_info=True)
+            await cl.Message(content=OUTAGE_MESSAGE).send()
+        else:
+            logger.exception("graph invoke failed; returning internal error")
+            await cl.Message(content=INTERNAL_ERROR_MESSAGE).send()
         return
 
     interrupts = result.get("__interrupt__")

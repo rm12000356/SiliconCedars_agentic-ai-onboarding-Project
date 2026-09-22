@@ -11,7 +11,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from agents.research.researcher import Research, MAX_SEARCH_ATTEMPTS
-from agents.research.report_writer import Report_W
+from agents.research.report_writer import report_writer
 from agents.research.supervisor import MAX_RESEARCH_ATTEMPTS
 from agents.research.research_node import make_research_node
 from graph.workflow import sub_workflow
@@ -94,7 +94,7 @@ def test_llm_report_writer_sets_report_written():
         ],
         task="What is the capital of France?",
     )
-    result = Report_W(state)
+    result = report_writer(state)
 
     assert result.get("report_written") is True
     assert "research_messages" in result and len(result["research_messages"]) >= 1
