@@ -8,6 +8,7 @@ from state.state import SupervisorState
 from services.llm import llm
 from services.budget import get_budget
 from services.memory import write_fact
+from agents.supervisor import _rows_upstream_index
 
 logger = logging.getLogger(__name__)
 
@@ -82,8 +83,16 @@ SYNTHESIS_PROMPT = (
     "limitation. Do not mention specialists, steps, or internal tooling."
 )
 
+CHART_SYNTHESIS_NOTE = (
+    "A chart image is already shown to the user separately. Do not mention the "
+    "chart at all, and never redraw, retable, or re-describe its data in "
+    "Markdown, ASCII art, or diagram syntax such as Mermaid."
+)
+
 
 class _ResultView(NamedTuple):
+    plan_index: Optional[int]      # plan index; None for the legacy last_result
+    source: str
     status: str
     summary: str
     issue: Optional[str]
@@ -97,14 +106,49 @@ def _completed_results(state: SupervisorState) -> list[_ResultView]:
     """Completed plan results, or the legacy single last_result when no plan is
     present (keeps direct callers and older checkpoints working)."""
     results = [
-        _ResultView(item.status, item.result_summary or "", item.issue)
-        for item in state.plan
+        _ResultView(i, item.route, item.status, item.result_summary or "", item.issue)
+        for i, item in enumerate(state.plan)
         if item.status in ("done", "failed", "skipped") and item.result_summary
     ]
     if not results and state.last_result is not None:
         lr = state.last_result
-        results.append(_ResultView(lr.status, lr.summary, lr.issue))
+        results.append(
+            _ResultView(None, lr.source, lr.status, lr.summary, lr.issue)
+        )
     return results
+
+
+def _chart_source_index(state: SupervisorState, visu_index: int) -> int | None:
+    """Plan index of the sql step whose rows a database visu charts, or None."""
+    if state.plan[visu_index].data_source == "inline":
+        return None
+    return _rows_upstream_index(state.plan, visu_index)
+
+
+def _split_chart_results(
+    state: SupervisorState, results: list[_ResultView]
+) -> tuple[list[_ResultView], list[str]]:
+    """Split completed results into (answers, chart_lines)."""
+    excluded: set[int] = set()
+    chart_lines: list[str] = []
+    for view in results:
+        if view.source != "visu" or view.status != "done":
+            continue
+        chart_lines.append(view.summary)
+        if view.plan_index is None:
+            continue
+        excluded.add(view.plan_index)
+        source = _chart_source_index(state, view.plan_index)
+        if source is not None:
+            excluded.add(source)
+
+    answers = [
+        view
+        for view in results
+        if not (view.source == "visu" and view.status == "done")
+        and (view.plan_index is None or view.plan_index not in excluded)
+    ]
+    return answers, chart_lines
 
 
 def _render_single(result: _ResultView) -> str:
@@ -113,16 +157,21 @@ def _render_single(result: _ResultView) -> str:
     return _user_facing_failure(result)
 
 
-def _synthesize_results(results: list[_ResultView]) -> str:
+def _synthesize_results(
+    results: list[_ResultView], has_chart: bool = False
+) -> str:
     joined = "\n\n".join(
         f"[{i + 1}] status={r.status}"
         + (f" issue={_issue_code(r.issue)}" if r.issue else "")
         + f"\n{r.summary}"
         for i, r in enumerate(results)
     )
+    system_prompt = SYNTHESIS_PROMPT
+    if has_chart:
+        system_prompt = f"{SYNTHESIS_PROMPT} {CHART_SYNTHESIS_NOTE}"
     try:
         response = llm().invoke([
-            SystemMessage(content=SYNTHESIS_PROMPT),
+            SystemMessage(content=system_prompt),
             HumanMessage(content=joined),
         ])
         text = str(response.content).strip()
@@ -195,13 +244,22 @@ def Finalize(state: SupervisorState, config: RunnableConfig) -> dict:
         return update
 
     results = _completed_results(state)
+    answers, chart_lines = _split_chart_results(state, results)
 
-    if len(results) == 1:
-        content = _render_single(results[0])
-    elif len(results) >= 2:
-        content = _synthesize_results(results)
+    if not answers:
+        content = "\n\n".join(chart_lines) or None
+    elif len(answers) == 1:
+        content = _render_single(answers[0])
     else:
-        content = None
+        content = _synthesize_results(answers, has_chart=bool(chart_lines))
+
+    if chart_lines and answers:
+        chart_block = "\n\n".join(chart_lines)
+        content = (
+            f"{content}\n\n{chart_block}"
+            if content and content.strip()
+            else chart_block
+        )
 
     extras = [
         note
