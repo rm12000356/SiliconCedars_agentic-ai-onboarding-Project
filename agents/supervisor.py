@@ -531,12 +531,19 @@ def _apply_clarification_cap(
     return plan
 
 
+def _rows_upstream_index(plan: list[PlanItem], idx: int) -> int | None:
+    """Index of the nearest done sql step with chartable rows before ``idx``."""
+    for i in range(idx - 1, -1, -1):
+        item = plan[i]
+        if item.route == "sql" and item.status == "done" and item.structured_data:
+            return i
+    return None
+
+
 def _rows_upstream(plan: list[PlanItem], idx: int) -> list[dict] | None:
     """The nearest done sql step's chartable rows before index ``idx``."""
-    for prev in reversed(plan[:idx]):
-        if prev.route == "sql" and prev.status == "done" and prev.structured_data:
-            return prev.structured_data
-    return None
+    index = _rows_upstream_index(plan, idx)
+    return plan[index].structured_data if index is not None else None
 
 
 def _maybe_insert_visu(

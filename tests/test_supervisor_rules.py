@@ -16,6 +16,8 @@ from agents.supervisor import (
     _apply_clarification_cap,
     _maybe_insert_visu,
     _plan_from_workflow,
+    _rows_upstream,
+    _rows_upstream_index,
     _skip_blocked_steps,
     _skip_unbudgeted_visu,
     _user_wants_visualization,
@@ -451,6 +453,33 @@ def test_skip_blocked_steps_allows_database_visu_with_rows():
     ]
     updated = _skip_blocked_steps(plan)
     assert updated[1].status == "pending"
+
+
+def test_rows_upstream_index_and_rows_agree():
+    plan = [
+        PlanItem(
+            route="sql",
+            task="a",
+            status="done",
+            structured_data=[{"label": "x", "value": 1}],
+        ),
+        PlanItem(route="rag", task="b", status="done"),
+        PlanItem(
+            route="sql",
+            task="c",
+            status="done",
+            structured_data=[{"label": "y", "value": 2}],
+        ),
+        PlanItem(route="visu", task="chart", data_source="database"),
+    ]
+    assert _rows_upstream_index(plan, 3) == 2
+    assert _rows_upstream(plan, 3) == [{"label": "y", "value": 2}]
+
+
+def test_rows_upstream_index_none_without_prior_sql_rows():
+    plan = [PlanItem(route="rag", task="b", status="done")]
+    assert _rows_upstream_index(plan, 1) is None
+    assert _rows_upstream(plan, 1) is None
 
 
 def test_skip_blocked_steps_never_skips_inline_visu():

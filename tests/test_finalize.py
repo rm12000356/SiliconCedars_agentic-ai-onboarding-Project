@@ -2,6 +2,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableConfig
 
 from agents.finalize import (
+    CHART_SYNTHESIS_NOTE,
     Finalize,
     NO_ANSWER_FALLBACK,
     OUTAGE_MESSAGE,
@@ -257,3 +258,283 @@ def test_bare_im_does_not_trigger_memory_extraction():
 
 def test_explicit_memory_intent_triggers_extraction():
     assert _might_contain_memorable_info("Remember that I prefer bar charts.")
+
+
+# --- chart handling ---------------------------------------------------------
+
+_SALES_ROWS = [{"label": "EU", "value": 100}, {"label": "MENA", "value": 200}]
+
+
+def _capture_model(captured, content="Synthesized answer."):
+    class _Response:
+        pass
+
+    response = _Response()
+    response.content = content
+
+    class _Model:
+        def invoke(self, messages):
+            captured["messages"] = messages
+            return response
+
+    return _Model()
+
+
+def test_single_answer_plus_chart_skips_llm(monkeypatch):
+    """One non-chart answer plus a chart: no synthesis, chart line appended."""
+
+    def boom(*_a, **_k):
+        raise AssertionError("one non-chart answer needs no synthesis")
+
+    monkeypatch.setattr("agents.finalize.llm", boom)
+
+    state = SupervisorState(
+        messages=[HumanMessage(content="count employees and chart sales")],
+        plan=[
+            PlanItem(
+                route="sql",
+                task="count employees",
+                status="done",
+                result_summary="The employees table contains 2 employees.",
+            ),
+            PlanItem(
+                route="sql",
+                task="sales by region",
+                status="done",
+                result_summary="Region totals: EU 100, MENA 200.",
+                structured_data=_SALES_ROWS,
+            ),
+            PlanItem(
+                route="visu",
+                task="chart sales",
+                status="done",
+                data_source="database",
+                result_summary="Here's the chart: Sales by region.",
+            ),
+        ],
+        chart_path="outputs/sales.png",
+        turn_count=1,
+    )
+
+    update = Finalize(state, _config())
+    content = update["messages"][0].content
+
+    assert content == (
+        "The employees table contains 2 employees.\n\n"
+        "Here's the chart: Sales by region."
+    )
+    assert "EU 100" not in content
+
+
+def test_two_answers_plus_chart_synthesizes_and_appends_chart(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr(
+        "agents.finalize.llm",
+        lambda *a, **k: _capture_model(
+            captured, "There are 2 employees. The policy is documented."
+        ),
+    )
+
+    state = SupervisorState(
+        messages=[HumanMessage(content="count, policy, and chart sales")],
+        plan=[
+            PlanItem(
+                route="sql",
+                task="count employees",
+                status="done",
+                result_summary="The employees table contains 2 employees.",
+            ),
+            PlanItem(
+                route="rag",
+                task="remote work policy",
+                status="done",
+                result_summary="The policy is documented.",
+            ),
+            PlanItem(
+                route="sql",
+                task="sales by region",
+                status="done",
+                result_summary="Region totals: EU 100, MENA 200.",
+                structured_data=_SALES_ROWS,
+            ),
+            PlanItem(
+                route="visu",
+                task="chart sales",
+                status="done",
+                data_source="database",
+                result_summary="Here's the chart: Sales by region.",
+            ),
+        ],
+        chart_path="outputs/sales.png",
+        turn_count=1,
+    )
+
+    update = Finalize(state, _config())
+    content = update["messages"][0].content
+
+    assert content.startswith("There are 2 employees. The policy is documented.")
+    assert content.endswith("Here's the chart: Sales by region.")
+
+    system, human = captured["messages"]
+    assert CHART_SYNTHESIS_NOTE in system.content
+    assert "2 employees" in human.content
+    assert "policy" in human.content.lower()
+    assert "Region totals" not in human.content
+    assert "EU" not in human.content
+
+
+def test_inline_visu_does_not_exclude_preceding_chartable_sql(monkeypatch):
+    """An inline chart uses typed-in numbers; a preceding chartable sql step
+    is a separate answer and must not be dropped."""
+    captured: dict = {}
+    monkeypatch.setattr(
+        "agents.finalize.llm",
+        lambda *a, **k: _capture_model(
+            captured, "Engineering 5, Sales 3. Total sales are 1000."
+        ),
+    )
+
+    state = SupervisorState(
+        messages=[HumanMessage(content="employees by dept and chart 10 and 20")],
+        plan=[
+            PlanItem(
+                route="sql",
+                task="employees by department",
+                status="done",
+                result_summary="Engineering 5, Sales 3.",
+                structured_data=[
+                    {"label": "Engineering", "value": 5},
+                    {"label": "Sales", "value": 3},
+                ],
+            ),
+            PlanItem(
+                route="sql",
+                task="total sales",
+                status="done",
+                result_summary="Total sales are 1000.",
+            ),
+            PlanItem(
+                route="visu",
+                task="chart these numbers: 10 and 20",
+                status="done",
+                data_source="inline",
+                result_summary="Here's the chart: Inline numbers.",
+            ),
+        ],
+        chart_path="outputs/inline.png",
+        turn_count=1,
+    )
+
+    update = Finalize(state, _config())
+    human = captured["messages"][1].content
+
+    assert "Engineering 5, Sales 3." in human
+    assert "Total sales are 1000." in human
+    assert update["messages"][0].content.endswith(
+        "Here's the chart: Inline numbers."
+    )
+
+
+def test_chart_only_uses_visu_summary_without_llm(monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("chart-only turn must not synthesize")
+
+    monkeypatch.setattr("agents.finalize.llm", boom)
+
+    state = SupervisorState(
+        messages=[HumanMessage(content="chart sales")],
+        plan=[
+            PlanItem(
+                route="sql",
+                task="sales",
+                status="done",
+                result_summary="Region totals: EU 100, MENA 200.",
+                structured_data=_SALES_ROWS,
+            ),
+            PlanItem(
+                route="visu",
+                task="chart",
+                status="done",
+                data_source="database",
+                result_summary="Here's the chart: Sales.",
+            ),
+        ],
+        chart_path="outputs/sales.png",
+        turn_count=1,
+    )
+
+    update = Finalize(state, _config())
+
+    assert update["messages"][0].content == "Here's the chart: Sales."
+
+
+def test_inline_chart_only_uses_summary_without_llm(monkeypatch):
+    def boom(*_a, **_k):
+        raise AssertionError("chart-only turn must not synthesize")
+
+    monkeypatch.setattr("agents.finalize.llm", boom)
+
+    state = SupervisorState(
+        messages=[HumanMessage(content="pie: 10 and 20")],
+        plan=[
+            PlanItem(
+                route="visu",
+                task="pie: 10 and 20",
+                status="done",
+                data_source="inline",
+                result_summary="Here's the chart: Pie.",
+            )
+        ],
+        chart_path="outputs/pie.png",
+        turn_count=1,
+    )
+
+    update = Finalize(state, _config())
+
+    assert update["messages"][0].content == "Here's the chart: Pie."
+
+
+def test_chart_note_absent_without_chart(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr(
+        "agents.finalize.llm",
+        lambda *a, **k: _capture_model(captured, "combined"),
+    )
+
+    Finalize(_two_step_state(), _config())
+
+    assert CHART_SYNTHESIS_NOTE not in captured["messages"][0].content
+
+
+def test_sql_plus_failed_visu_still_synthesizes(monkeypatch):
+    captured: dict = {}
+    monkeypatch.setattr(
+        "agents.finalize.llm",
+        lambda *a, **k: _capture_model(captured, "The chart could not be built."),
+    )
+
+    state = SupervisorState(
+        messages=[HumanMessage(content="count employees and chart sales")],
+        plan=[
+            PlanItem(
+                route="sql",
+                task="count employees",
+                status="done",
+                result_summary="The employees table contains 2 employees.",
+            ),
+            PlanItem(
+                route="visu",
+                task="chart sales",
+                status="skipped",
+                issue="no_data_for_chart",
+                result_summary="The chart was skipped because the data was unavailable.",
+            ),
+        ],
+        turn_count=1,
+    )
+
+    update = Finalize(state, _config())
+
+    assert "messages" in captured
+    assert "2 employees" in captured["messages"][1].content
+    assert update["messages"][0].content == "The chart could not be built."
