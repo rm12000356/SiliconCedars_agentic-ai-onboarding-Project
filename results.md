@@ -1,3 +1,15 @@
+# Routing / LLM evaluation baseline
+
+- **Date:** 2026-09-22
+- **Commit:** `ae8b0370edaa3c9a1b9a211175f9268fc9753176` (branch `fix/routing-and-guards`)
+- **Model:** Groq `openai/gpt-oss-120b` (primary)
+- **Command:** `pytest -m llm tests/test_llm_supervisor_routing.py`
+- **Result:** all routing categories at 100% accuracy, threshold 90%
+
+Raw output follows.
+
+---
+
 tests/test_llm_supervisor_routing.py::test_llm_planner_routes_sql_prompts [sql] OK  expected=['sql']  got=['sql']  'How many employees are there?'
 [sql] OK  expected=['sql']  got=['sql']  'How many sales records are in the database?'
 [sql] OK  expected=['sql']  got=['sql']  'Show me the total salary of every employee.'

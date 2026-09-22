@@ -384,7 +384,7 @@ def _plan_from_workflow(workflow: WorkflowPlan) -> list[PlanItem]:
 
 
 _TASK_WS_RE = re.compile(r"\s+")
-_NUMERIC_TOKEN_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_NUMERIC_TOKEN_RE = re.compile(r"\b\d[\d,]*(?:\.\d+)?\b")
 
 
 def _normalized_task(task: str) -> str:
@@ -587,10 +587,17 @@ def _skip_blocked_steps(plan: list[PlanItem]) -> list[PlanItem]:
             continue
         if not upstream_sql or _rows_upstream(plan, index) is None:
             item.status = "skipped"
-            item.issue = "no_data_for_chart"
-            item.result_summary = (
-                "The chart was skipped because the data was unavailable."
-            )
+            if any(p.status == "done" for p in upstream_sql):
+                item.issue = "not_chartable"
+                item.result_summary = (
+                    "The chart was skipped because the result had no "
+                    "chartable data (it needs a label and a number)."
+                )
+            else:
+                item.issue = "no_data_for_chart"
+                item.result_summary = (
+                    "The chart was skipped because the data was unavailable."
+                )
     return plan
 
 

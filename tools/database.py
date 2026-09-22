@@ -3,7 +3,7 @@ from db.connection import get_elevated_connection, get_general_connection
 from langchain.tools import tool
 
 MAX_ROWS = 5000
-MAX_RESULT_BYTES = 2_000_000
+MAX_RESULT_BYTES = 1_000_000
 
 @tool
 def get_salary(employee_id: int) -> dict:

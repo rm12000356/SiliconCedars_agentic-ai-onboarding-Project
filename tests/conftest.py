@@ -41,7 +41,7 @@ requires_db = pytest.mark.skipif(
 )
 
 
-_NUMERIC_RE = re.compile(r"\d[\d,]*(?:\.\d+)?k?")
+_NUMERIC_RE = re.compile(r"\b\d[\d,]*(?:\.\d+)?k?\b")
 
 
 def _normalize_numeric(token: str) -> str:

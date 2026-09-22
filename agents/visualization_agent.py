@@ -8,7 +8,8 @@ from uuid import uuid4
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 
 from state.state import SupervisorState, SpecialistResult, ChartSpec
 from services.llm import llm
@@ -72,6 +73,18 @@ def Visualization(state: SupervisorState) -> dict:
             # A database-backed chart with no rows can only fail or invent
             # numbers via the LLM fallback; fail fast instead.
             logger.warning("[VISU] no structured_data for database chart")
+            if (
+                state.last_result is not None
+                and state.last_result.source == "sql"
+                and state.last_result.status == "done"
+            ):
+                # The query succeeded but produced no label/value pairs
+                # (e.g. a single count or a 3-column result).
+                return _failed_result(
+                    "The chart was skipped because the result had no "
+                    "chartable data (it needs a label and a number).",
+                    "not_chartable",
+                )
             return _failed_result(
                 "The chart was skipped because the data was unavailable.",
                 "no_data_for_chart",
@@ -271,42 +284,40 @@ def _render_chart(spec: ChartSpec) -> Path:
     filename = f"{_safe_title(spec.title)}_{uuid4().hex[:8]}.png"
     filepath = OUTPUT_DIR / filename
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig = Figure(figsize=(10, 6))
+    FigureCanvasAgg(fig)
+    ax = fig.subplots()
 
-    try:
-        if spec.chart_type == "bar":
-            ax.bar(spec.labels, spec.values)
-            ax.tick_params(axis="x", rotation=45)
+    if spec.chart_type == "bar":
+        ax.bar(spec.labels, spec.values)
+        ax.tick_params(axis="x", rotation=45)
 
-        elif spec.chart_type == "line":
-            ax.plot(
-                spec.labels,
-                spec.values,
-                marker="o",
-            )
-            ax.tick_params(axis="x", rotation=45)
+    elif spec.chart_type == "line":
+        ax.plot(
+            spec.labels,
+            spec.values,
+            marker="o",
+        )
+        ax.tick_params(axis="x", rotation=45)
 
-        elif spec.chart_type == "pie":
-            ax.pie(
-                spec.values,
-                labels=spec.labels,
-                autopct="%1.1f%%",
-            )
-
-        ax.set_title(spec.title)
-
-        if spec.chart_type != "pie":
-            fig.tight_layout()
-
-        fig.savefig(
-            str(filepath),
-            format="png",
-            dpi=150,
-            bbox_inches="tight",
+    elif spec.chart_type == "pie":
+        ax.pie(
+            spec.values,
+            labels=spec.labels,
+            autopct="%1.1f%%",
         )
 
-    finally:
-        plt.close(fig)
+    ax.set_title(spec.title)
+
+    if spec.chart_type != "pie":
+        fig.tight_layout()
+
+    fig.savefig(
+        str(filepath),
+        format="png",
+        dpi=150,
+        bbox_inches="tight",
+    )
 
     return filepath
 

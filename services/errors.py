@@ -94,3 +94,10 @@ def classify_llm_error(exc: Exception) -> str | None:
         if result is not None:
             return result
     return None
+
+
+def is_provider_outage(exc: Exception) -> bool:
+    """True when the error is a provider auth/transient outage, as opposed to
+    an internal bug (psycopg, pydantic, or a plain RuntimeError). Entry points
+    use this to choose between the outage message and a generic error."""
+    return classify_llm_error(exc) in ("auth", "transient")

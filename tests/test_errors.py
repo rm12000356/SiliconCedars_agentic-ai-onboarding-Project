@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import ValidationError
 
-from services.errors import classify_llm_error
+from services.errors import classify_llm_error, is_provider_outage
 
 
 class _HttpError(Exception):
@@ -94,3 +94,14 @@ def test_aggregate_is_classified_by_chained_timeout():
             raise RuntimeError(_AGGREGATE) from cause
     except RuntimeError as exc:
         assert classify_llm_error(exc) == "transient"
+
+
+def test_is_provider_outage_true_for_auth_and_transient():
+    assert is_provider_outage(_HttpError(401, "Unauthorized")) is True
+    assert is_provider_outage(_HttpError(503, "Service Unavailable")) is True
+
+
+def test_is_provider_outage_false_for_internal_bugs():
+    assert is_provider_outage(RuntimeError("Missing runtime configuration")) is False
+    assert is_provider_outage(ValidationError.from_exception_data("X", [])) is False
+    assert is_provider_outage(ValueError("bad sql")) is False

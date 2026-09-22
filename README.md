@@ -97,7 +97,7 @@ Clarification is an interrupt: the planner emits a single `clarification` step, 
 
 Failures are handled by the plan, not by per-hop routing: a failed step is marked `failed`, independent remaining steps still run, and a dependent chart step is `skipped` when no upstream rows exist. `finalize` maps internal issue codes to user-safe text and reports skipped steps. A per-turn hop cap (`MAX_HOPS`, `MAX_PLAN_STEPS + MAX_CLARIFICATIONS_PER_TURN + 1`) ends any turn that exceeds the legitimate step budget, logging an error because reaching it means a plan invariant broke.
 
-The research subgraph (`agents/research/`) is its own controller loop. `Sub_controler` ends immediately if `report_written` is set, forces `report` after `MAX_RESEARCH_ATTEMPTS`, and forces `report` once a substantial research note exists — so it cannot loop on the report step.
+The research subgraph (`agents/research/`) is its own controller loop. `sub_controller` ends immediately if `report_written` is set, forces `report` after `MAX_RESEARCH_ATTEMPTS`, and forces `report` once a substantial research note exists — so it cannot loop on the report step.
 
 ### Cost and Latency Budget
 
@@ -171,7 +171,7 @@ CHART_STORAGE_DIR=.chainlit_charts
 RAG_NO_MATCH_DISTANCE_THRESHOLD=0.8  # max pgvector distance to count as a match
 MAX_LLM_CALLS_PER_TURN=20            # aggregate per user turn
 MAX_TOKENS_PER_TURN=60000            # best-effort; structured outputs may not report usage
-MAX_TURN_SECONDS=120                 # wall-clock per user turn
+MAX_TURN_SECONDS=120                 # accumulated LLM call time per user turn
 ```
 
 Use `general` unless you are explicitly testing salary or credential paths.
@@ -215,6 +215,13 @@ Expected tables include:
 * `general_embeddings`
 
 The `vector` extension should also be installed.
+
+### Demo Logins
+
+`db/init/05_app_users.sql` seeds three local-only accounts for the Chainlit login
+(`alice/alice123` and `admin/admin` are `elevated`; `bob/bob123` is `general`).
+Passwords are plain for local demo only; regenerate the bcrypt hashes before any
+real deployment.
 
 ### 3. Python Dependencies
 
@@ -303,8 +310,8 @@ pytest -m integration
 | `pytest -m "llm or integration"` | All live tests |
 | `pytest -m "not llm"` | Unit + integration |
 | `pytest -m "not integration"` | Unit + LLM |
-| `pytest tests/test_routing.py -m` | A single test file |
-| `pytest tests/test_routing.py::test_name -m` | A single test |
+| `pytest tests/test_routing.py` | A single test file |
+| `pytest tests/test_routing.py::test_name` | A single test |
 | `pytest -k "sql"` | Tests whose name matches a keyword |
 | `pytest tests/test_security_boundaries.py tests/test_sql_roles.py` | Security keyword boundaries + DB role boundaries |
 | `pytest --markers` | List registered markers |
@@ -335,7 +342,7 @@ Evaluation requires `LANGSMITH_API_KEY`.
 Dataset names are created once. Bump the name, for example `routing-eval-v2`, if the examples change.
 
 ```python
-from graph.workflow import Main_WorkFlow
+from graph.workflow import main_workflow
 from services.memory import get_checkpointer
 from evaluation.evaluation import (
     run_routing_evaluation,
@@ -343,7 +350,7 @@ from evaluation.evaluation import (
 )
 
 memory, _ = get_checkpointer()
-graph = Main_WorkFlow(memory)
+graph = main_workflow(memory)
 
 run_routing_evaluation("routing-eval-v1", graph)
 run_rag_evaluation("rag-eval-v1")
@@ -373,6 +380,13 @@ LLM-as-judge correctness is used only when a reference answer exists.
   files are persisted by a local storage client and served through an
   authenticated `/charts/<token>` route, so charts survive a page refresh. The
   `main.py` CLI prints the file path instead of rendering the image.
+
+* **Charts need exactly two columns**
+  A result is chartable only when every row is a `label`/`value` pair (a string
+  label and a numeric, non-boolean value), for example
+  `SELECT region, SUM(amount) FROM sales GROUP BY region`. A single count or a
+  3-column result is not chartable; the chart step is skipped and the answer says
+  so instead of inventing values.
 
 * **No cross-turn data chaining**
   Requests such as `"chart that"` after a previous `Finalize` are not supported. Same-turn SQL → visualization is supported.

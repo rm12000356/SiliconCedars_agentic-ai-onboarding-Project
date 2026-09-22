@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "fix/**", "chore/**", "feature/**"]
+  pull_request:
+
+jobs:
+  unit:
+    name: Unit + fuzz tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run unit and fuzz tests with coverage
+        run: pytest --cov --cov-report=term-missing --cov-report=xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+  integration:
+    name: Integration tests (Postgres + pgvector)
+    runs-on: ubuntu-latest
+    env:
+      DB_HOST: localhost
+      DB_PORT: "5432"
+      DB_NAME: company_intel
+      DB_GENERAL_USER: general_role
+      DB_GENERAL_PASSWORD: general_dev_password
+      DB_ELEVATED_USER: app_owner
+      DB_ELEVATED_PASSWORD: devpassword
+      DATABASE_URL: postgresql://app_owner:devpassword@localhost:5432/company_intel
+      CHAINLIT_DATABASE_URL: postgresql+asyncpg://app_owner:devpassword@localhost:5432/company_intel
+      CHAINLIT_AUTH_SECRET: ci-not-a-real-secret
+      CHECKPOINT_BACKEND: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Start Postgres (pgvector)
+        run: docker compose up -d
+
+      - name: Wait for schema initialization
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec silicon_cedars_db \
+              psql -U app_owner -d company_intel -c "SELECT 1 FROM app_users LIMIT 1" >/dev/null 2>&1; then
+              echo "Database ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Database did not become ready in time" >&2
+          docker logs silicon_cedars_db
+          exit 1
+
+      - name: Run integration tests
+        run: pytest -m integration
+
+      - name: Show database logs on failure
+        if: failure()
+        run: docker logs silicon_cedars_db

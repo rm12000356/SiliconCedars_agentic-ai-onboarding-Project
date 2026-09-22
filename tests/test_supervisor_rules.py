@@ -233,6 +233,18 @@ def test_validate_plan_drops_inline_visu_without_enough_numbers():
     assert [item.route for item in validated] == ["clarification"]
 
 
+def test_validate_plan_ignores_quarter_and_year_tokens():
+    # "Q3" and "2024" are one embedded digit plus a year, not two chart
+    # values; the word boundary must not count the "3" inside "Q3".
+    plan = [
+        PlanItem(route="visu", task="chart it", data_source="inline"),
+    ]
+    validated, _ = _validate_plan(
+        plan, _state(text="Chart Q3 2024 sales")
+    )
+    assert [item.route for item in validated] == ["clarification"]
+
+
 def test_validate_plan_keeps_inline_visu_with_two_values():
     plan = [
         PlanItem(
@@ -424,6 +436,7 @@ def test_skip_blocked_steps_skips_when_sql_returned_no_rows():
     ]
     updated = _skip_blocked_steps(plan)
     assert updated[1].status == "skipped"
+    assert updated[1].issue == "not_chartable"
 
 
 def test_skip_blocked_steps_allows_database_visu_with_rows():

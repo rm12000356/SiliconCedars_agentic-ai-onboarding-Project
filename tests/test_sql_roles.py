@@ -15,15 +15,19 @@ def test_general_role_cannot_query_salaries():
                 cur.fetchall()
 
 
-def test_general_role_cannot_see_salaries_in_metadata():
+@pytest.mark.parametrize("table_name", ["salaries", "credentials"])
+def test_general_role_cannot_see_sensitive_tables_in_metadata(table_name):
     with get_general_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT table_name FROM information_schema.tables WHERE table_name = 'salaries'"
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_name = %s",
+                (table_name,),
             )
             row = cur.fetchone()
-            assert row is None, "salaries table should be invisible to general_role, but it was found"
-            print("Confirmed: salaries is invisible to general_role")
+            assert row is None, (
+                f"{table_name} should be invisible to general_role, but it was found"
+            )
 
 
 def test_general_query_rejects_ddl_and_temp_tables():

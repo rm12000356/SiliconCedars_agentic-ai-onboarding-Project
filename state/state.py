@@ -225,11 +225,11 @@ class SubGraphSupervisorState(BaseModel):
     )
     research_succeeded: Optional[bool] = Field(
         default=None,
-        description="Set by Report_W as a structural signal, not inferred from tone."
+        description="Set by report_writer as a structural signal, not inferred from tone."
     )
     report_written: bool = Field(
         default=False,
-        description="Set by Report_W once a report exists; Sub_controler checks it "
+        description="Set by report_writer once a report exists; sub_controller checks it "
                     "first and ends, preventing the report/controller infinite loop."
     )
 
