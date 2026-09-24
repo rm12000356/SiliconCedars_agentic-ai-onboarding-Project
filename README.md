@@ -10,7 +10,9 @@ Deterministic code guards, including attempt counters, task history, `done → e
 The LLM is only consulted for genuinely novel routing decisions.
 
 ## Video Demo
-https://github.com/user-attachments/assets/db0bdb0f-a2f4-4327-a24f-d13dc19d467c
+
+https://github.com/user-attachments/assets/7043728b-1c9d-48c2-b124-a65f9a996a47
+
 
 ## Architecture
 
