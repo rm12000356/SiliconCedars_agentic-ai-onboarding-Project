@@ -1,3 +1,4 @@
+
 # SiliconCedars Agentic AI Onboarding Project
 
 ## Multi-Agent Supervisor
@@ -7,6 +8,9 @@ A hierarchical AI assistant built with LangGraph. A main supervisor routes reque
 Deterministic code guards, including attempt counters, task history, `done → end`, and same-turn SQL → visualization, handle loop prevention and routing invariants that proved unreliable when left purely to prompt instructions.
 
 The LLM is only consulted for genuinely novel routing decisions.
+
+## Video Demo
+https://github.com/user-attachments/assets/db0bdb0f-a2f4-4327-a24f-d13dc19d467c
 
 ## Architecture
 
